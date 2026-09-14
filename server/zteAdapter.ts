@@ -121,8 +121,31 @@ async function readSystemName() { const session = snmp.createSession(String(conf
 
 let cached: { expiresAt: number; value: LiveOltSnapshot } | undefined;
 let snapshotInFlight: Promise<LiveOltSnapshot> | undefined;
+let detailInFlight: Promise<void> | undefined;
 const detailCache = new Map<string, ReturnType<typeof parseOnuDetail> & { signal: number; status: LiveONU["status"] }>();
 let detailCursor = 0;
+
+function startDetailEnrichment(rows: StateRow[]) {
+  if (detailInFlight) return;
+  const pending = rows.filter((row) => !detailCache.has(row.interfaceName));
+  const batch = Array.from({ length: Math.min(8, pending.length) }, (_, index) => pending[(detailCursor + index) % pending.length]).filter(Boolean);
+  if (!batch.length) return;
+  detailCursor = (detailCursor + batch.length) % Math.max(pending.length, 1);
+  detailInFlight = (async () => {
+    const session = await TelnetSession.open();
+    try {
+      await session.command("terminal length 0");
+      for (const row of batch) {
+        try {
+          const detail = parseOnuDetail(await session.command(`show gpon onu detail-info gpon-onu_${row.interfaceName}`));
+          const signal = parseOnuPower(await session.command(`show pon power attenuation gpon-onu_${row.interfaceName}`));
+          const status = row.status === "online" && detail.online ? (signal < -27 ? "alerta" : "online") : "offline";
+          detailCache.set(row.interfaceName, { ...detail, signal, status });
+        } catch (error) { console.warn(`[OLT] detail enrichment skipped for ${row.interfaceName}:`, error); }
+      }
+    } finally { session.close(); }
+  })().finally(() => { detailInFlight = undefined; cached = undefined; });
+}
 
 export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
   if (cached && cached.expiresAt > Date.now()) return cached.value;
@@ -134,15 +157,6 @@ export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
       const stateRows = parseOnuState(await session.command("show gpon onu state"));
       const allowedSlots = new Set(parseBoards(String(configValue("OLT_ZTE_BOARDS"))).map((board) => board.slot));
       const filteredRows = stateRows.filter((row) => allowedSlots.has(Number(row.interfaceName.split("/")[1])));
-      const rowsToEnrich = filteredRows.filter((row) => !detailCache.has(row.interfaceName));
-      const enrichmentBatch = Array.from({ length: Math.min(1, rowsToEnrich.length) }, (_, index) => rowsToEnrich[(detailCursor + index) % rowsToEnrich.length]).filter(Boolean);
-      if (enrichmentBatch.length) detailCursor = (detailCursor + enrichmentBatch.length) % Math.max(rowsToEnrich.length, 1);
-      for (const row of enrichmentBatch) {
-        const detail = parseOnuDetail(await session.command(`show gpon onu detail-info gpon-onu_${row.interfaceName}`));
-        const signal = parseOnuPower(await session.command(`show pon power attenuation gpon-onu_${row.interfaceName}`));
-        const status = row.status === "online" && detail.online ? (signal < -27 ? "alerta" : "online") : "offline";
-        detailCache.set(row.interfaceName, { ...detail, signal, status });
-      }
       const onus = filteredRows.map((row) => {
         const detail = detailCache.get(row.interfaceName);
         const status = detail ? (row.status === "offline" ? "offline" : detail.status) : row.status;
@@ -150,6 +164,7 @@ export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
       });
       const value: LiveOltSnapshot = { connected: true, host: String(configValue("OLT_ZTE_HOST")), model: "ZTE C300", hostname: await readSystemName(), transport: "SNMP v2c + Telnet", source: "real", syncedAt: Date.now(), onus };
       cached = { expiresAt: Date.now() + 12000, value };
+      setTimeout(() => startDetailEnrichment(filteredRows), 250);
       return value;
     } finally { session.close(); }
   })();
