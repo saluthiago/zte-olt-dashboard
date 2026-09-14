@@ -155,6 +155,8 @@ async function readSystemName() {
 }
 
 let cached: { expiresAt: number; value: LiveOltSnapshot } | undefined;
+const detailCache = new Map<string, ReturnType<typeof parseOnuDetail> & { signal: number; status: LiveONU["status"] }>();
+let detailCursor = 0;
 
 export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
   if (cached && cached.expiresAt > Date.now()) return cached.value;
@@ -166,42 +168,36 @@ export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
     const boards = parseBoards(requiredEnv("OLT_ZTE_BOARDS"));
     const allowedSlots = new Set(boards.map((board) => board.slot));
     const filteredRows = stateRows.filter((row) => allowedSlots.has(Number(row.interfaceName.split("/")[1])));
-    const onus: LiveONU[] = [];
-
-    // Primeiro ciclo conservador: enriquece apenas uma janela de ONUs para não gerar
-    // uma rajada de comandos Telnet em uma OLT com centenas de assinantes.
-    for (const row of filteredRows.slice(0, 12)) {
+    // O C300 pode ter centenas de ONUs. Enriquecemos 12 novas por ciclo e mantemos
+    // o cache em memória para que, após alguns ciclos, todas tenham descrição real.
+    const rowsToEnrich = filteredRows.filter((row) => !detailCache.has(row.interfaceName));
+    const enrichmentBatch = Array.from({ length: Math.min(12, rowsToEnrich.length) }, (_, index) => rowsToEnrich[(detailCursor + index) % rowsToEnrich.length]).filter(Boolean);
+    if (enrichmentBatch.length) detailCursor = (detailCursor + enrichmentBatch.length) % Math.max(rowsToEnrich.length, 1);
+    for (const row of enrichmentBatch) {
       const detailOutput = await session.command(`show gpon onu detail-info gpon-onu_${row.interfaceName}`);
       const powerOutput = await session.command(`show pon power attenuation gpon-onu_${row.interfaceName}`);
       const detail = parseOnuDetail(detailOutput);
-      const status = row.status === "online" && detail.online ? (parseOnuPower(powerOutput) < -27 ? "alerta" : "online") : "offline";
+      const signal = parseOnuPower(powerOutput);
+      const status = row.status === "online" && detail.online ? (signal < -27 ? "alerta" : "online") : "offline";
+      detailCache.set(row.interfaceName, { ...detail, signal, status });
+    }
+
+    const onus: LiveONU[] = [];
+    for (const row of filteredRows) {
+      const detail = detailCache.get(row.interfaceName);
+      const status = detail ? (row.status === "offline" ? "offline" : detail.status) : row.status;
       onus.push({
         id: row.interfaceName,
-        serial: detail.serial,
+        serial: detail?.serial ?? "—",
         mac: "não informado",
-        name: detail.name,
+        name: detail?.name ?? `ONU ${row.interfaceName}`,
         slot: row.interfaceName,
         status,
-        signal: parseOnuPower(powerOutput),
-        distance: detail.distance,
-        uptime: detail.uptime,
-        lastEvent: status === "offline" ? "ONU offline" : status === "alerta" ? "RX baixo" : "Sem alarmes",
-        profile: detail.profile,
-      });
-    }
-    for (const row of filteredRows.slice(12)) {
-      onus.push({
-        id: row.interfaceName,
-        serial: "—",
-        mac: "não informado",
-        name: `ONU ${row.interfaceName}`,
-        slot: row.interfaceName,
-        status: row.status,
-        signal: -99,
-        distance: 0,
-        uptime: "—",
-        lastEvent: row.status === "offline" ? "ONU offline" : "Aguardando leitura detalhada",
-        profile: "GPON",
+        signal: detail?.signal ?? -99,
+        distance: detail?.distance ?? 0,
+        uptime: detail?.uptime ?? "—",
+        lastEvent: status === "offline" ? "ONU offline" : status === "alerta" ? "RX baixo" : detail ? "Sem alarmes" : "Aguardando leitura detalhada",
+        profile: detail?.profile ?? "GPON",
       });
     }
 
