@@ -140,14 +140,13 @@ let cached: { expiresAt: number; value: LiveOltSnapshot } | undefined;
 let snapshotInFlight: Promise<LiveOltSnapshot> | undefined;
 let detailInFlight: Promise<void> | undefined;
 const detailCache = new Map<string, ReturnType<typeof parseOnuDetail> & { signal: number; status: LiveONU["status"] }>();
-let detailCursor = 0;
+const stateCache = new Map<string, StateRow>();
 
 function startDetailEnrichment(rows: StateRow[]) {
   if (detailInFlight) return;
   const pending = rows.filter((row) => !detailCache.has(row.interfaceName)).sort((a, b) => Number(b.status === "online") - Number(a.status === "online"));
-  const batch = Array.from({ length: Math.min(8, pending.length) }, (_, index) => pending[(detailCursor + index) % pending.length]).filter(Boolean);
+  const batch = pending.slice(0, 12);
   if (!batch.length) return;
-  detailCursor = (detailCursor + batch.length) % Math.max(pending.length, 1);
   detailInFlight = (async () => {
     const session = await TelnetSession.open();
     try {
@@ -172,8 +171,9 @@ export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
     try {
       await session.command("terminal length 0");
       const stateRows = parseOnuState(await session.command("show gpon onu state"));
+      for (const row of stateRows) stateCache.set(row.interfaceName, row);
       const allowedSlots = new Set(parseBoards(String(configValue("OLT_ZTE_BOARDS"))).map((board) => board.slot));
-      const filteredRows = stateRows.filter((row) => allowedSlots.has(Number(row.interfaceName.split("/")[1])));
+      const filteredRows = Array.from(stateCache.values()).filter((row) => allowedSlots.has(Number(row.interfaceName.split("/")[1])));
       const onus = filteredRows.map((row) => {
         const detail = detailCache.get(row.interfaceName);
         const status = detail ? (row.status === "offline" ? "offline" : detail.status) : row.status;
