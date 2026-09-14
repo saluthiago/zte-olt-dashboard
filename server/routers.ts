@@ -2,7 +2,7 @@ import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
-import { executeOperatorAction, getLiveOltSnapshot } from "./zteAdapter";
+import { executeOperatorAction, getLiveOltSnapshot, getOltConfig, updateOltConfig } from "./zteAdapter";
 import { z } from "zod";
 
 export const appRouter = router({
@@ -21,6 +21,8 @@ export const appRouter = router({
 
   olt: router({
     liveSnapshot: publicProcedure.query(() => getLiveOltSnapshot()),
+    config: publicProcedure.query(() => getOltConfig()),
+    updateConfig: publicProcedure.input(z.object({ host: z.string(), snmpPort: z.number(), telnetPort: z.number(), boards: z.string() })).mutation(({ input }) => updateOltConfig(input)),
     operatorAction: publicProcedure.input(z.object({ action: z.enum(["authorize", "disable", "reboot"]), onuId: z.string().regex(/^\d+\/\d+\/\d+:\d+$/, "Identificador de ONU inválido") })).mutation(({ input }) => executeOperatorAction(input.action, input.onuId)),
   }),
 
