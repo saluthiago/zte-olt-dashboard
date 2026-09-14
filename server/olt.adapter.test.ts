@@ -23,6 +23,10 @@ describe("ZTE C300 adapter parsing", () => {
     expect(power).toBe(-22.366);
   });
 
+  it("does not invent RX power when the OLT reports no signal", () => {
+    expect(parseOnuPower("up      Rx :no signal         Tx:N/A               N/A")).toBe(-99);
+  });
+
   it("rejects an invalid ONU target before opening Telnet", async () => {
     await expect(executeOperatorAction("reboot", "invalid-target")).rejects.toThrow("ONU identifier is invalid");
   });

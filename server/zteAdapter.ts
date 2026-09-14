@@ -99,7 +99,7 @@ export function parseOnuDetail(output: string) {
 export function parseOnuPower(output: string) {
   const downstream = output.match(/down\s+Tx\s*:\s*(-?[\d.]+)\(dbm\)\s+Rx\s*:\s*(-?[\d.]+)/i);
   const upstream = output.match(/up\s+Rx\s*:\s*(-?[\d.]+)\(dbm\)/i);
-  return Number(downstream?.[2] ?? upstream?.[1] ?? -35);
+  return Number(downstream?.[2] ?? upstream?.[1] ?? -99);
 }
 
 class TelnetSession {
