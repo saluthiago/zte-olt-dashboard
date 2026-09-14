@@ -136,7 +136,14 @@ export default function Home() {
   const [editingDescriptionId, setEditingDescriptionId] = useState<string | null>(null);
   const [descriptionDraft, setDescriptionDraft] = useState("");
 
-  const ponOptions = useMemo(() => Array.from(new Set(onus.map((onu) => onu.slot.split(":")[0]))).sort(), [onus]);
+  const ponOptions = useMemo(() => {
+    const configured = (oltConfig.data?.boards ?? "").split(",").flatMap((entry) => {
+      const [slot, countText] = entry.split(":");
+      const count = Number(countText);
+      return Number.isInteger(count) ? Array.from({ length: count }, (_, index) => `1/${slot}/${index + 1}`) : [];
+    });
+    return Array.from(new Set([...configured, ...onus.map((onu) => onu.slot.split(":")[0])])).sort();
+  }, [oltConfig.data?.boards, onus]);
 
   const filteredOnus = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
