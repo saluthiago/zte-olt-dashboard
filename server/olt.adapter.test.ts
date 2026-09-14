@@ -1,0 +1,25 @@
+import { describe, expect, it } from "vitest";
+import { parseOnuDetail, parseOnuPower, parseOnuState } from "./zteAdapter";
+
+describe("ZTE C300 adapter parsing", () => {
+  it("parses ONU state rows", () => {
+    const rows = parseOnuState("1/8/1:4     enable       enable      working      1(GPON)\n1/8/1:7     enable       disable     OffLine      1(GPON)");
+    expect(rows).toEqual([
+      { interfaceName: "1/8/1:4", status: "online" },
+      { interfaceName: "1/8/1:7", status: "offline" },
+    ]);
+  });
+
+  it("parses real detail fields", () => {
+    const detail = parseOnuDetail("Name: ONU-1:4\nType: ZTE-F680\nState: ready\nPhase state: working\nSerial number: KAON0901FA05\nDescription: maria.luiza@pauqueimado\nONU Distance: 2519m\nOnline Duration: 32h 55m 15s");
+    expect(detail.name).toBe("maria.luiza@pauqueimado");
+    expect(detail.serial).toBe("KAON0901FA05");
+    expect(detail.distance).toBe(2.519);
+    expect(detail.online).toBe(true);
+  });
+
+  it("parses downstream ONU RX power", () => {
+    const power = parseOnuPower("up Rx :-25.623(dbm) Tx:2.378(dbm)\ndown Tx :5.846(dbm) Rx:-22.366(dbm)");
+    expect(power).toBe(-22.366);
+  });
+});
