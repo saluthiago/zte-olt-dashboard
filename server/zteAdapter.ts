@@ -117,6 +117,23 @@ function validateOnuId(onuId: string) { if (!/^\d+\/\d+\/\d+:\d+$/.test(onuId)) 
 
 export async function executeOperatorAction(action: OperatorAction, onuId: string) { const target = validateOnuId(onuId); const session = await TelnetSession.open(); try { await session.command("terminal length 0"); await session.command("config t"); if (action === "reboot") { await session.command(`pon-onu-mng gpon-onu_${target}`); await session.command("reboot"); await session.command("yes"); } else { await session.command(`interface gpon-onu_${target}`); await session.command(action === "disable" ? "shutdown" : "no shutdown"); await session.command("end"); } return { success: true as const, action, onuId: target, executedAt: Date.now() }; } finally { session.close(); } }
 
+export async function updateOnuDescription(onuId: string, description: string) {
+  const target = validateOnuId(onuId);
+  const cleanDescription = description.trim();
+  if (!cleanDescription || cleanDescription.length > 64 || /[\r\n;]/.test(cleanDescription)) throw new Error("Descrição inválida (1 a 64 caracteres)");
+  const session = await TelnetSession.open();
+  try {
+    await session.command("terminal length 0");
+    await session.command("config t");
+    await session.command(`interface gpon-onu_${target}`);
+    await session.command(`name ${cleanDescription}`);
+    await session.command("end");
+    detailCache.delete(target);
+    cached = undefined;
+    return { success: true as const, onuId: target, description: cleanDescription, updatedAt: Date.now() };
+  } finally { session.close(); }
+}
+
 async function readSystemName() { const session = snmp.createSession(String(configValue("OLT_ZTE_HOST")), requiredEnv("OLT_ZTE_SNMP_COMMUNITY"), { port: Number(configValue("OLT_ZTE_SNMP_PORT")), version: snmp.Version2c, timeout: 3000, retries: 0 }); return new Promise<string>((resolve) => { session.get(["1.3.6.1.2.1.1.5.0"], (error: Error | null, varbinds: Array<{ value: unknown }>) => { session.close(); resolve(error ? "CHAPARRAL-C300" : String(varbinds[0]?.value ?? "CHAPARRAL-C300")); }); }); }
 
 let cached: { expiresAt: number; value: LiveOltSnapshot } | undefined;

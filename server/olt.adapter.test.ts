@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { executeOperatorAction, parseOnuDetail, parseOnuPower, parseOnuState, updateOltConfig } from "./zteAdapter";
+import { executeOperatorAction, parseOnuDetail, parseOnuPower, parseOnuState, updateOltConfig, updateOnuDescription } from "./zteAdapter";
 
 describe("ZTE C300 adapter parsing", () => {
   it("parses ONU state rows", () => {
@@ -30,5 +30,9 @@ describe("ZTE C300 adapter parsing", () => {
   it("rejects invalid editable OLT settings", () => {
     expect(() => updateOltConfig({ host: "not valid", snmpPort: 7361, telnetPort: 7326, boards: "8:8,9:16" })).toThrow("Host/IP inválido");
     expect(() => updateOltConfig({ host: "45.162.123.46", snmpPort: 0, telnetPort: 7326, boards: "8:8,9:16" })).toThrow("Porta SNMP inválida");
+  });
+
+  it("rejects an empty ONU description before opening Telnet", async () => {
+    await expect(updateOnuDescription("1/8/2:3", " ")).rejects.toThrow("Descrição inválida");
   });
 });
