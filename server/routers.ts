@@ -2,7 +2,8 @@ import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
-import { getLiveOltSnapshot } from "./zteAdapter";
+import { executeOperatorAction, getLiveOltSnapshot } from "./zteAdapter";
+import { z } from "zod";
 
 export const appRouter = router({
     // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
@@ -20,6 +21,7 @@ export const appRouter = router({
 
   olt: router({
     liveSnapshot: publicProcedure.query(() => getLiveOltSnapshot()),
+    operatorAction: publicProcedure.input(z.object({ action: z.enum(["authorize", "disable", "reboot"]), onuId: z.string().regex(/^\d+\/\d+\/\d+:\d+$/, "Identificador de ONU inválido") })).mutation(({ input }) => executeOperatorAction(input.action, input.onuId)),
   }),
 
   // TODO: add feature routers here, e.g.

@@ -26,6 +26,8 @@ export type LiveOltSnapshot = {
   onus: LiveONU[];
 };
 
+export type OperatorAction = "authorize" | "disable" | "reboot";
+
 type StateRow = { interfaceName: string; status: "online" | "offline" };
 
 function requiredEnv(name: string) {
@@ -130,6 +132,7 @@ class TelnetSession {
       const output = this.buffer.slice(start);
       const clean = output.replace(/[\u0000-\u001f\u007f]/g, "");
       if (/--?More--|More/i.test(clean)) this.socket.write(" ");
+      if (/Confirm to reboot\?\s*\[yes\/no\]:/i.test(clean)) return clean;
       if (/[A-Za-z0-9._-]+[#>]\s*$/m.test(clean)) return clean;
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
@@ -138,6 +141,32 @@ class TelnetSession {
 
   close() {
     this.socket.destroy();
+  }
+}
+
+function validateOnuId(onuId: string) {
+  if (!/^\d+\/\d+\/\d+:\d+$/.test(onuId)) throw new Error("ONU identifier is invalid");
+  return onuId;
+}
+
+export async function executeOperatorAction(action: OperatorAction, onuId: string) {
+  const target = validateOnuId(onuId);
+  const session = await TelnetSession.open();
+  try {
+    await session.command("terminal length 0");
+    await session.command("config t");
+    if (action === "reboot") {
+      await session.command(`pon-onu-mng gpon-onu_${target}`);
+      await session.command("reboot");
+      await session.command("yes");
+    } else {
+      await session.command(`interface gpon-onu_${target}`);
+      await session.command(action === "disable" ? "shutdown" : "no shutdown");
+      await session.command("end");
+    }
+    return { success: true as const, action, onuId: target, executedAt: Date.now() };
+  } finally {
+    session.close();
   }
 }
 

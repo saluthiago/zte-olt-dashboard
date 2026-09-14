@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseOnuDetail, parseOnuPower, parseOnuState } from "./zteAdapter";
+import { executeOperatorAction, parseOnuDetail, parseOnuPower, parseOnuState } from "./zteAdapter";
 
 describe("ZTE C300 adapter parsing", () => {
   it("parses ONU state rows", () => {
@@ -21,5 +21,9 @@ describe("ZTE C300 adapter parsing", () => {
   it("parses downstream ONU RX power", () => {
     const power = parseOnuPower("up Rx :-25.623(dbm) Tx:2.378(dbm)\ndown Tx :5.846(dbm) Rx:-22.366(dbm)");
     expect(power).toBe(-22.366);
+  });
+
+  it("rejects an invalid ONU target before opening Telnet", async () => {
+    await expect(executeOperatorAction("reboot", "invalid-target")).rejects.toThrow("ONU identifier is invalid");
   });
 });
