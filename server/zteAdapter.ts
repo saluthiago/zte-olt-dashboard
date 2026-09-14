@@ -127,7 +127,7 @@ let detailCursor = 0;
 
 function startDetailEnrichment(rows: StateRow[]) {
   if (detailInFlight) return;
-  const pending = rows.filter((row) => !detailCache.has(row.interfaceName));
+  const pending = rows.filter((row) => !detailCache.has(row.interfaceName)).sort((a, b) => Number(b.status === "online") - Number(a.status === "online"));
   const batch = Array.from({ length: Math.min(8, pending.length) }, (_, index) => pending[(detailCursor + index) % pending.length]).filter(Boolean);
   if (!batch.length) return;
   detailCursor = (detailCursor + batch.length) % Math.max(pending.length, 1);
