@@ -102,6 +102,22 @@ export function parseOnuPower(output: string) {
   return Number(downstream?.[2] ?? upstream?.[1] ?? -99);
 }
 
+export type UnconfiguredONU = { pon: string; serial: string; state: string };
+
+export function parseUnconfiguredOnus(output: string): UnconfiguredONU[] {
+  return Array.from(output.matchAll(/gpon-onu_(\d+\/\d+\/\d+):(\d+)\s+([A-Za-z0-9_-]+)\s+(\S+)/gi)).map((match) => ({ pon: match[1], serial: match[3], state: match[4] }));
+}
+
+export function parseUsedOnuIds(output: string): number[] {
+  return Array.from(output.matchAll(/^\s*onu\s+(\d+)\s+/gim)).map((match) => Number(match[1])).filter(Number.isInteger);
+}
+
+export function firstFreeOnuId(output: string, max = 128): number | null {
+  const used = new Set(parseUsedOnuIds(output));
+  for (let id = 1; id <= max; id += 1) if (!used.has(id)) return id;
+  return null;
+}
+
 class TelnetSession {
   private socket: net.Socket;
   private buffer = "";
@@ -116,6 +132,26 @@ class TelnetSession {
 function validateOnuId(onuId: string) { if (!/^\d+\/\d+\/\d+:\d+$/.test(onuId)) throw new Error("ONU identifier is invalid"); return onuId; }
 
 export async function executeOperatorAction(action: OperatorAction, onuId: string) { const target = validateOnuId(onuId); const session = await TelnetSession.open(); try { await session.command("terminal length 0"); await session.command("config t"); if (action === "reboot") { await session.command(`pon-onu-mng gpon-onu_${target}`); await session.command("reboot"); await session.command("yes"); } else { await session.command(`interface gpon-onu_${target}`); await session.command(action === "disable" ? "shutdown" : "no shutdown"); await session.command("end"); } return { success: true as const, action, onuId: target, executedAt: Date.now() }; } finally { session.close(); } }
+
+export async function getUnconfiguredOnus() {
+  const session = await TelnetSession.open();
+  try { await session.command("terminal length 0"); return parseUnconfiguredOnus(await session.command("show gpon onu uncfg")); }
+  finally { session.close(); }
+}
+
+export async function getPonAvailability(pon: string) {
+  if (!/^\d+\/\d+\/\d+$/.test(pon)) throw new Error("PON inválida");
+  const session = await TelnetSession.open();
+  try { await session.command("terminal length 0"); const output = await session.command(`show running-config interface gpon-olt_${pon}`); return { pon, usedIds: parseUsedOnuIds(output), nextOnuId: firstFreeOnuId(output), raw: output }; }
+  finally { session.close(); }
+}
+
+export async function authorizeUnconfiguredOnu(input: { pon: string; serial: string; onuId: number; description?: string }) {
+  if (!/^\d+\/\d+\/\d+$/.test(input.pon) || !/^[A-Za-z0-9_-]{8,32}$/.test(input.serial) || !Number.isInteger(input.onuId) || input.onuId < 1 || input.onuId > 128) throw new Error("Dados da ONU inválidos");
+  const session = await TelnetSession.open();
+  try { await session.command("terminal length 0"); await session.command("config t"); await session.command(`interface gpon-olt_${input.pon}`); await session.command(`onu ${input.onuId} type ZTE-F680 sn ${input.serial}`); if (input.description?.trim()) { await session.command(`interface gpon-onu_${input.pon}:${input.onuId}`); await session.command(`name ${input.description.trim().slice(0, 64)}`); } await session.command("end"); cached = undefined; return { success: true as const, pon: input.pon, onuId: input.onuId, serial: input.serial, executedAt: Date.now() }; }
+  finally { session.close(); }
+}
 
 export async function updateOnuDescription(onuId: string, description: string) {
   const target = validateOnuId(onuId);

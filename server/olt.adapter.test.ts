@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { executeOperatorAction, parseOnuDetail, parseOnuPower, parseOnuState, updateOltConfig, updateOnuDescription } from "./zteAdapter";
+import { executeOperatorAction, firstFreeOnuId, parseOnuDetail, parseOnuPower, parseOnuState, parseUnconfiguredOnus, updateOltConfig, updateOnuDescription } from "./zteAdapter";
 
 describe("ZTE C300 adapter parsing", () => {
   it("parses ONU state rows", () => {
@@ -25,6 +25,11 @@ describe("ZTE C300 adapter parsing", () => {
 
   it("does not invent RX power when the OLT reports no signal", () => {
     expect(parseOnuPower("up      Rx :no signal         Tx:N/A               N/A")).toBe(-99);
+  });
+
+  it("parses unconfigured ONUs and finds the first free PON ONU id", () => {
+    expect(parseUnconfiguredOnus("gpon-onu_1/8/3:1 KAON09014FEF unknown")).toEqual([{ pon: "1/8/3", serial: "KAON09014FEF", state: "unknown" }]);
+    expect(firstFreeOnuId("onu 1 type ZTE-F680 sn AAAA\nonu 2 type ZTE-F680 sn BBBB")).toBe(3);
   });
 
   it("rejects an invalid ONU target before opening Telnet", async () => {
