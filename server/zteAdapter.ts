@@ -156,7 +156,18 @@ export async function authorizeUnconfiguredOnu(input: { pon: string; serial: str
 export async function moveOnu(input: { source: string; targetPon: string; targetOnuId: number; serial: string }) {
   if (!/^\d+\/\d+\/\d+:\d+$/.test(input.source) || !/^\d+\/\d+\/\d+$/.test(input.targetPon) || !/^[A-Za-z0-9_-]{8,32}$/.test(input.serial) || !Number.isInteger(input.targetOnuId) || input.targetOnuId < 1 || input.targetOnuId > 128) throw new Error("Dados da movimentação inválidos");
   const session = await TelnetSession.open();
-  try { await session.command("terminal length 0"); await session.command("config t"); const sourceParts = input.source.split(":"); const sourcePon = sourceParts[0]; const sourceId = sourceParts[1]; await session.command(`interface gpon-olt_${sourcePon}`); await session.command(`no onu ${sourceId}`); await session.command(`interface gpon-olt_${input.targetPon}`); await session.command(`onu ${input.targetOnuId} type ZTE-F680 sn ${input.serial}`); await session.command("end"); cached = undefined; return { success: true as const, source: input.source, target: `${input.targetPon}:${input.targetOnuId}`, serial: input.serial, executedAt: Date.now() }; }
+  try {
+    await session.command("terminal length 0");
+    const sourceParts = input.source.split(":"); const sourcePon = sourceParts[0]; const sourceId = sourceParts[1];
+    const sourceConfig = await session.command(`show running-config interface gpon-onu_${input.source}`);
+    const interfaceCommands = sourceConfig.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !/^interface\s|^!$|^end$/i.test(line));
+    await session.command("config t");
+    await session.command(`interface gpon-olt_${sourcePon}`); await session.command(`no onu ${sourceId}`);
+    await session.command(`interface gpon-olt_${input.targetPon}`); await session.command(`onu ${input.targetOnuId} type ZTE-F680 sn ${input.serial}`);
+    await session.command(`interface gpon-onu_${input.targetPon}:${input.targetOnuId}`);
+    for (const command of interfaceCommands) if (!/^onu\s+/i.test(command)) await session.command(command);
+    await session.command("end"); cached = undefined; return { success: true as const, source: input.source, target: `${input.targetPon}:${input.targetOnuId}`, serial: input.serial, copiedCommands: interfaceCommands.length, executedAt: Date.now() };
+  }
   finally { session.close(); }
 }
 
