@@ -31,6 +31,11 @@ import {
   Wifi,
   X,
   Zap,
+  FileText,
+  Plus,
+  Trash2,
+  Upload,
+  WifiOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { applyOperatorAction, getOperatorActionLabel, getSignalLevel } from "@shared/olt";
@@ -124,9 +129,14 @@ export default function Home() {
   const [statusFilter, setStatusFilter] = useState<"todos" | ONUStatus>("todos");
   const [ponFilter, setPonFilter] = useState("todos");
   const [activeNav, setActiveNav] = useState("Visão geral");
+  const [templates, setTemplates] = useState(() => { try { return JSON.parse(localStorage.getItem("olt-templates") || "[]") as Array<{id:number;name:string;body:string}>; } catch { return []; } });
+  const [templateName, setTemplateName] = useState("");
+  const [templateBody, setTemplateBody] = useState("");
+  const [provisionForm, setProvisionForm] = useState({ onuId: "", vlan: "", description: "", templateId: "", upload: "", download: "" });
+  const [realtimeEvents, setRealtimeEvents] = useState<EventItem[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [lastSync, setLastSync] = useState("agora");
-  const liveSnapshot = trpc.olt.liveSnapshot.useQuery(undefined, { refetchInterval: 30000, retry: 1 });
+  const liveSnapshot = trpc.olt.liveSnapshot.useQuery(undefined, { refetchInterval: 5000, refetchIntervalInBackground: true, staleTime: 0, retry: 1 });
   const tableRef = useRef<HTMLDivElement>(null);
   const operatorAction = trpc.olt.operatorAction.useMutation();
   const descriptionUpdate = trpc.olt.updateDescription.useMutation();
@@ -145,19 +155,30 @@ export default function Home() {
     return Array.from(new Set([...configured, ...onus.map((onu) => onu.slot.split(":")[0])])).sort();
   }, [oltConfig.data?.boards, onus]);
 
+  const sortedOnus = useMemo(() => [...onus].sort((a, b) => Number(b.status === "offline") - Number(a.status === "offline") || Number(b.status === "alerta") - Number(a.status === "alerta")), [onus]);
+
   const filteredOnus = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
-    return onus.filter((onu) => {
+    return sortedOnus.filter((onu) => {
       const matchesSearch = !normalizedSearch || `${onu.name} ${onu.serial} ${onu.mac} ${onu.slot}`.toLowerCase().includes(normalizedSearch);
       const matchesStatus = statusFilter === "todos" || onu.status === statusFilter;
       const matchesPon = ponFilter === "todos" || onu.slot.startsWith(`${ponFilter}:`);
       return matchesSearch && matchesStatus && matchesPon;
     });
-  }, [onus, search, statusFilter, ponFilter]);
+  }, [sortedOnus, search, statusFilter, ponFilter]);
   const selected = onus.find((onu) => onu.id === selectedId) ?? onus[0];
   const onlineCount = onus.filter((onu) => onu.status === "online").length;
   const alertCount = onus.filter((onu) => onu.status === "alerta").length;
   const offlineCount = onus.filter((onu) => onu.status === "offline").length;
+  const onlineOnus = onus.filter((onu) => onu.status === "online" || onu.status === "alerta");
+
+  function saveTemplate() {
+    const name = templateName.trim();
+    if (!name || !templateBody.trim()) { toast.warning("Informe nome e texto do template"); return; }
+    const next = [...templates, { id: Date.now(), name, body: templateBody }];
+    setTemplates(next); localStorage.setItem("olt-templates", JSON.stringify(next)); setTemplateName(""); setTemplateBody(""); toast.success("Template salvo localmente");
+  }
+  function deleteTemplate(id: number) { const next = templates.filter((item) => item.id !== id); setTemplates(next); localStorage.setItem("olt-templates", JSON.stringify(next)); }
 
   function navigate(label: string) {
     setActiveNav(label);
@@ -172,7 +193,7 @@ export default function Home() {
       toast("Eventos de fibra", { description: `${events.length} eventos no feed operacional` });
     } else if (label === "Logs de operação") {
       toast("Logs de operação", { description: "Os comandos executados nesta sessão aparecem aqui." });
-    } else if (label === "Configurações") {
+    } else if (label === "Templates") { window.scrollTo({ top: 0, behavior: "smooth" }); } else if (label === "Autorizar ONU") { window.scrollTo({ top: 0, behavior: "smooth" }); } else if (label === "Tempo real") { window.scrollTo({ top: 0, behavior: "smooth" }); } else if (label === "Adicionar ONU") { window.scrollTo({ top: 0, behavior: "smooth" }); } else if (label === "Configurações") {
       toast("Configurações", { description: "Conexão ativa: SNMP v2c + Telnet · ZTE C300" });
     }
   }
@@ -195,19 +216,21 @@ export default function Home() {
   }
 
   useEffect(() => {
+    if (!liveSnapshot.data?.onus?.length) return;
+    setRealtimeEvents((previous) => {
+      const previousById = new Map(previous.map((event) => [event.detail.split(" · ")[0], event]));
+      const currentOffline = liveSnapshot.data!.onus.filter((onu) => onu.status === "offline");
+      const fresh = currentOffline.filter((onu) => !previousById.has(onu.slot)).map((onu) => ({ id: Date.now() + Math.random(), type: "fiber" as const, title: "Desconexão de fibra detectada", detail: `${onu.slot} · ${onu.name}`, time: "agora", fresh: true }));
+      return [...fresh, ...previous].slice(0, 30);
+    });
+  }, [liveSnapshot.data?.syncedAt]);
+
+  useEffect(() => {
     if (liveSnapshot.data?.onus?.length) {
       setOnus(liveSnapshot.data.onus);
       setLastSync("agora");
     }
   }, [liveSnapshot.data]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setLastSync("agora");
-      setOnus((current) => current.map((onu) => onu.status === "online" ? { ...onu, signal: Number((onu.signal + (Math.random() - .5) * .6).toFixed(1)) } : onu));
-    }, 7000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   function runAction(action: string, onu: ONU) {
     if (liveSnapshot.isLoading) {
@@ -270,7 +293,7 @@ Esta ação será executada na OLT ZTE C300 real.`)) return;
           </div>
           <div className="mt-8 rounded-xl border border-cyan-300/15 bg-cyan-300/[.06] p-3"><div className="flex items-center justify-between"><div className="flex items-center gap-2"><span className={`relative flex h-2.5 w-2.5 ${liveSnapshot.isError ? "bg-rose-400" : ""}`}><span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 ${liveSnapshot.isError ? "bg-rose-400" : "bg-emerald-400"}`} /><span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${liveSnapshot.isError ? "bg-rose-400" : "bg-emerald-400"}`} /></span><span className={`text-xs font-semibold ${liveSnapshot.isError ? "text-rose-200" : "text-emerald-200"}`}>{liveSnapshot.isError ? "Sem resposta" : "Conectada"}</span></div><span className="text-[10px] text-slate-500">{liveSnapshot.data?.transport ?? "SNMP + Telnet"}</span></div><p className="mt-2 text-xs text-slate-400">{liveSnapshot.data?.model ?? "ZTE C300"} · {liveSnapshot.data?.host ?? "45.162.123.46"}</p><div className="mt-3 flex items-center justify-between text-[10px] text-slate-500"><span>Hostname</span><span className="max-w-[125px] truncate font-mono text-slate-300">{liveSnapshot.data?.hostname ?? "aguardando..."}</span></div></div>
           <nav className="mt-8 space-y-1"><p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-slate-600">Operação</p>{[{ label: "Visão geral", icon: LayoutDashboard }, { label: "ONUs / Clientes", icon: Network }, { label: "Eventos de fibra", icon: Cable }, { label: "Diagnóstico", icon: Activity }].map(({ label, icon: Icon }) => <button key={label} onClick={() => navigate(label)} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${activeNav === label ? "bg-cyan-300/10 text-cyan-100 shadow-[inset_2px_0_0_#67e8f9]" : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"}`}><Icon className="h-4 w-4" /><span>{label}</span>{label === "Eventos de fibra" && <span className="ml-auto rounded-full bg-rose-400/15 px-1.5 py-0.5 text-[10px] text-rose-300">3</span>}</button>)}</nav>
-          <nav className="mt-8 space-y-1"><p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-slate-600">Sistema</p>{[{ label: "Logs de operação", icon: ClipboardList }, { label: "Configurações", icon: Settings2 }].map(({ label, icon: Icon }) => <button key={label} onClick={() => navigate(label)} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${activeNav === label ? "bg-slate-800 text-slate-100" : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"}`}><Icon className="h-4 w-4" /><span>{label}</span></button>)}</nav>
+          <nav className="mt-8 space-y-1"><p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-slate-600">Operações</p>{[{ label: "Autorizar ONU", icon: ShieldCheck }, { label: "Adicionar ONU", icon: Plus }, { label: "Tempo real", icon: WifiOff }, { label: "Templates", icon: FileText }, { label: "Logs de operação", icon: ClipboardList }, { label: "Configurações", icon: Settings2 }].map(({ label, icon: Icon }) => <button key={label} onClick={() => navigate(label)} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${activeNav === label ? "bg-slate-800 text-slate-100" : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"}`}><Icon className="h-4 w-4" /><span>{label}</span></button>)}</nav>
           <div className="mt-auto space-y-3"><button onClick={() => toast("Central de suporte", { description: "A equipe de NOC está disponível para apoiar sua operação." })} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-800/70 hover:text-slate-300"><LifeBuoy className="h-4 w-4" />Central de suporte</button><div className="flex items-center gap-3 border-t border-slate-800/80 px-2 pt-4"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-700 text-xs font-bold text-slate-200">AC</div><div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold text-slate-200">Admin Central</p><p className="truncate text-[10px] text-slate-500">Operador NOC</p></div><MoreHorizontal className="h-4 w-4 text-slate-600" /></div></div>
         </aside>
 
@@ -278,6 +301,12 @@ Esta ação será executada na OLT ZTE C300 real.`)) return;
           <header className="flex h-[72px] items-center justify-between border-b border-slate-800/80 px-5 sm:px-8"><div className="flex items-center gap-3"><button className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 lg:hidden" onClick={() => setSidebarOpen(true)}><Menu className="h-5 w-5" /></button><div><div className="flex items-center gap-2"><span className="text-xs font-semibold uppercase tracking-[.15em] text-cyan-300">Monitoramento</span><span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">PRODUÇÃO</span></div><h1 className="mt-1 text-lg font-semibold tracking-tight text-white">Visão geral da OLT</h1></div></div><div className="flex items-center gap-3"><div className="hidden items-center gap-2 text-[11px] text-slate-500 sm:flex"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Dados atualizados {lastSync}</div><button onClick={() => { setLastSync("sincronizando..."); liveSnapshot.refetch().then(() => { setLastSync("agora"); toast.success("Telemetria sincronizada com a OLT"); }).catch(() => toast.error("Falha ao sincronizar a OLT")); }} className="rounded-lg border border-slate-700 bg-slate-900/60 p-2 text-slate-400 transition hover:border-cyan-300/30 hover:text-cyan-200"><RefreshCw className="h-4 w-4" /></button><button onClick={() => toast("Perfil do operador", { description: "Admin Central · permissões completas" })} className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-700 bg-slate-800 text-slate-400"><UserRound className="h-4 w-4" /></button></div></header>
 
           <div className="mx-auto max-w-[1450px] p-5 sm:p-8">
+            {activeNav === "Templates" && <section className="mb-7 rounded-2xl border border-violet-300/20 bg-[#0b1a2a]/90 p-6"><p className="text-xs font-semibold uppercase tracking-[.15em] text-violet-300">Templates</p><h2 className="mt-2 text-xl font-semibold text-white">Textos de configuração reutilizáveis</h2><p className="mt-1 text-xs text-slate-500">Salvos neste navegador para usar durante a autorização de ONU.</p><div className="mt-5 grid gap-3 md:grid-cols-[220px_1fr_auto]"><input value={templateName} onChange={(e) => setTemplateName(e.target.value)} placeholder="Nome do template" className="h-10 rounded-lg border border-slate-700 bg-slate-950/60 px-3 text-xs text-slate-200" /><textarea value={templateBody} onChange={(e) => setTemplateBody(e.target.value)} placeholder="Cole o texto limpo do template..." className="min-h-10 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs text-slate-200" /><button onClick={saveTemplate} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-violet-300 px-4 text-xs font-bold text-slate-950"><Plus className="h-4 w-4" />Adicionar</button></div><div className="mt-5 space-y-2">{templates.length === 0 && <p className="text-xs text-slate-500">Nenhum template cadastrado.</p>}{templates.map((item) => <div key={item.id} className="flex items-start justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3"><div><p className="text-xs font-semibold text-slate-200">{item.name}</p><pre className="mt-2 whitespace-pre-wrap text-[11px] text-slate-400">{item.body}</pre></div><button onClick={() => deleteTemplate(item.id)} className="text-rose-300"><Trash2 className="h-4 w-4" /></button></div>)}</div></section>}
+
+            {(activeNav === "Autorizar ONU" || activeNav === "Adicionar ONU") && <section className="mb-7 rounded-2xl border border-emerald-300/20 bg-[#0b1a2a]/90 p-6"><p className="text-xs font-semibold uppercase tracking-[.15em] text-emerald-300">{activeNav === "Adicionar ONU" ? "Adicionar ONU" : "Autorizar ONU"}</p><h2 className="mt-2 text-xl font-semibold text-white">{activeNav === "Adicionar ONU" ? "Autorização manual" : "ONUs disponíveis para autorização"}</h2><p className="mt-1 text-xs text-slate-500">Preencha os parâmetros e confirme antes de executar a autorização na OLT.</p><div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><select value={provisionForm.onuId} onChange={(e) => setProvisionForm({ ...provisionForm, onuId: e.target.value })} className="h-10 rounded-lg border border-slate-700 bg-slate-950/60 px-3 text-xs text-slate-200"><option value="">Selecione uma ONU online</option>{onlineOnus.map((onu) => <option key={onu.id} value={onu.slot}>{onu.slot} · {onu.name}</option>)}</select><input value={provisionForm.vlan} onChange={(e) => setProvisionForm({ ...provisionForm, vlan: e.target.value })} placeholder="VLAN" className="h-10 rounded-lg border border-slate-700 bg-slate-950/60 px-3 text-xs text-slate-200" /><input value={provisionForm.description} onChange={(e) => setProvisionForm({ ...provisionForm, description: e.target.value })} placeholder="Descrição do cliente" className="h-10 rounded-lg border border-slate-700 bg-slate-950/60 px-3 text-xs text-slate-200" /><select value={provisionForm.templateId} onChange={(e) => setProvisionForm({ ...provisionForm, templateId: e.target.value })} className="h-10 rounded-lg border border-slate-700 bg-slate-950/60 px-3 text-xs text-slate-200"><option value="">Sem template</option>{templates.map((item) => <option key={item.id} value={String(item.id)}>{item.name}</option>)}</select><input value={provisionForm.upload} onChange={(e) => setProvisionForm({ ...provisionForm, upload: e.target.value })} placeholder="Upload (Mbps)" className="h-10 rounded-lg border border-slate-700 bg-slate-950/60 px-3 text-xs text-slate-200" /><input value={provisionForm.download} onChange={(e) => setProvisionForm({ ...provisionForm, download: e.target.value })} placeholder="Download (Mbps)" className="h-10 rounded-lg border border-slate-700 bg-slate-950/60 px-3 text-xs text-slate-200" /></div><button onClick={() => { const onu = onus.find((item) => item.slot === provisionForm.onuId); if (!onu) { toast.warning("Selecione uma ONU"); return; } runAction("authorize", onu); }} className="mt-5 inline-flex items-center gap-2 rounded-lg bg-emerald-300 px-4 py-2.5 text-xs font-bold text-slate-950"><ShieldCheck className="h-4 w-4" />Autorizar na OLT</button></section>}
+
+            {activeNav === "Tempo real" && <section className="mb-7 rounded-2xl border border-rose-300/20 bg-[#0b1a2a]/90 p-6"><div className="flex items-center gap-2"><span className="h-2.5 w-2.5 animate-ping rounded-full bg-rose-400" /><p className="text-xs font-semibold uppercase tracking-[.15em] text-rose-300">Tempo real</p></div><h2 className="mt-2 text-xl font-semibold text-white">Desconexões de fibra</h2><p className="mt-1 text-xs text-slate-500">Atualização automática a cada 5 segundos; eventos novos aparecem no topo.</p><div className="mt-5 space-y-2">{(realtimeEvents.length ? realtimeEvents : events.filter((item) => item.type === "fiber")).map((event) => <div key={event.id} className="flex items-center gap-3 rounded-lg border border-rose-400/15 bg-rose-400/[.04] p-3"><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-rose-400" /><div><p className="text-xs font-semibold text-slate-200">{event.title}</p><p className="text-[11px] text-slate-500">{event.detail} · {event.time}</p></div></div>)}</div></section>}
+
             {activeNav === "Configurações" && <section className="mb-7 rounded-2xl border border-cyan-300/20 bg-[#0b1a2a]/90 p-6 shadow-[0_12px_32px_rgba(0,0,0,.18)]"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[.15em] text-cyan-300">Configurações da OLT</p><h2 className="mt-2 text-xl font-semibold text-white">Parâmetros reais da conexão</h2><p className="mt-1 text-xs text-slate-500">Os valores abaixo foram lidos do ambiente protegido e podem ser ajustados para a próxima sincronização.</p></div><span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold text-emerald-200">{oltConfig.data?.communityConfigured ? "SNMP configurado" : "SNMP pendente"}</span></div><div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><label className="text-xs text-slate-400">Host/IP<input value={configForm.host} onChange={(e) => setConfigForm({ ...configForm, host: e.target.value })} className="mt-2 h-10 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 font-mono text-xs text-slate-200 outline-none focus:border-cyan-300/50" /></label><label className="text-xs text-slate-400">Porta SNMP<input inputMode="numeric" value={configForm.snmpPort} onChange={(e) => setConfigForm({ ...configForm, snmpPort: e.target.value })} className="mt-2 h-10 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 font-mono text-xs text-slate-200 outline-none focus:border-cyan-300/50" /></label><label className="text-xs text-slate-400">Porta Telnet<input inputMode="numeric" value={configForm.telnetPort} onChange={(e) => setConfigForm({ ...configForm, telnetPort: e.target.value })} className="mt-2 h-10 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 font-mono text-xs text-slate-200 outline-none focus:border-cyan-300/50" /></label><label className="text-xs text-slate-400">Slots:PONs<input value={configForm.boards} onChange={(e) => setConfigForm({ ...configForm, boards: e.target.value })} placeholder="8:8,9:16" className="mt-2 h-10 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 font-mono text-xs text-slate-200 outline-none focus:border-cyan-300/50" /></label></div><div className="mt-5 flex flex-wrap items-center justify-between gap-3"><p className="text-[11px] text-slate-500">Credenciais: {oltConfig.data?.usernameConfigured ? "configuradas e ocultas" : "não configuradas"}. Nunca são exibidas na tela.</p><button onClick={saveConfig} disabled={configUpdate.isPending} className="rounded-lg bg-cyan-300 px-4 py-2.5 text-xs font-bold text-slate-950 transition hover:bg-cyan-200 disabled:opacity-50">{configUpdate.isPending ? "Salvando..." : "Salvar configuração"}</button></div></section>}
 
             <section className="mb-7 flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><p className="text-sm text-slate-500">Domingo, 14 de setembro de 2026 · 22:53 BRT</p><h2 className="mt-2 text-3xl font-semibold tracking-tight text-white">Olá, operador<span className="text-cyan-300">.</span></h2><p className="mt-1 text-sm text-slate-400">Acompanhe sua rede de fibra e responda rápido aos eventos críticos.</p>{liveSnapshot.isLoading && <p className="mt-3 text-xs text-cyan-200">Consultando dados reais da OLT C300...</p>}{liveSnapshot.error && <p className="mt-3 rounded-lg border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs text-rose-200">Falha na coleta real: {liveSnapshot.error.message}</p>}</div><button onClick={() => { liveSnapshot.refetch().then(() => toast.success("Eventos e estados atualizados")); }} className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-300 px-4 py-2.5 text-xs font-bold text-slate-950 shadow-[0_0_22px_rgba(103,232,249,.12)] transition hover:bg-cyan-200 active:scale-[.98]"><Zap className="h-4 w-4" />Atualizar telemetria</button></section>
@@ -293,7 +322,7 @@ Esta ação será executada na OLT ZTE C300 real.`)) return;
             </section>
 
             <section className="mt-6 grid gap-4 md:grid-cols-3"><div className="rounded-2xl border border-slate-800/80 bg-[#0b1a2a]/75 p-5"><div className="flex items-center gap-3"><div className="rounded-lg bg-blue-400/10 p-2 text-blue-300"><Cloud className="h-4 w-4" /></div><div><p className="text-xs text-slate-500">RX médio</p><p className="mt-1 font-mono text-lg font-semibold text-white">-22,7 <span className="text-xs font-normal text-slate-500">dBm</span></p></div></div><p className="mt-3 text-[10px] text-slate-600">Média das ONUs online</p></div><div className="rounded-2xl border border-slate-800/80 bg-[#0b1a2a]/75 p-5"><div className="flex items-center gap-3"><div className="rounded-lg bg-violet-400/10 p-2 text-violet-300"><Cable className="h-4 w-4" /></div><div><p className="text-xs text-slate-500">Fibra monitorada</p><p className="mt-1 font-mono text-lg font-semibold text-white">18,42 <span className="text-xs font-normal text-slate-500">km</span></p></div></div><p className="mt-3 text-[10px] text-slate-600">Maior distância: ONU 1/1/1:4</p></div><div className="rounded-2xl border border-slate-800/80 bg-[#0b1a2a]/75 p-5"><div className="flex items-center gap-3"><div className="rounded-lg bg-emerald-400/10 p-2 text-emerald-300"><ShieldCheck className="h-4 w-4" /></div><div><p className="text-xs text-slate-500">Proteção operacional</p><p className="mt-1 text-lg font-semibold text-white">Ativa</p></div></div><p className="mt-3 text-[10px] text-slate-600">Ações críticas registradas em log</p></div></section>
-            <footer className="mt-8 flex flex-col justify-between gap-2 border-t border-slate-800/60 pt-5 text-[10px] text-slate-600 sm:flex-row"><span>OLT.OPS · Console operacional ZTE</span><span className="flex items-center gap-2"><span className={`h-1.5 w-1.5 rounded-full ${liveSnapshot.isError ? "bg-rose-400" : "bg-emerald-400"}`} />{liveSnapshot.isError ? "Falha na telemetria real · usando último estado" : "Telemetria real · atualização automática a cada 30s"}</span></footer>
+            <footer className="mt-8 flex flex-col justify-between gap-2 border-t border-slate-800/60 pt-5 text-[10px] text-slate-600 sm:flex-row"><span>OLT.OPS · Console operacional ZTE</span><span className="flex items-center gap-2"><span className={`h-1.5 w-1.5 rounded-full ${liveSnapshot.isError ? "bg-rose-400" : "bg-emerald-400"}`} />{liveSnapshot.isError ? "Falha na telemetria real · usando último estado" : "Telemetria real · atualização automática a cada 5s"}</span></footer>
           </div>
         </main>
       </div>

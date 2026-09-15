@@ -180,7 +180,7 @@ export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
         return { id: row.interfaceName, serial: detail?.serial ?? "—", mac: "não informado", name: detail?.name ?? `ONU ${row.interfaceName}`, slot: row.interfaceName, status, signal: detail?.signal ?? -99, distance: detail?.distance ?? 0, uptime: detail?.uptime ?? "—", lastEvent: status === "offline" ? "ONU offline" : status === "alerta" ? "RX baixo" : detail ? "Sem alarmes" : "Aguardando leitura detalhada", profile: detail?.profile ?? "GPON" };
       });
       const value: LiveOltSnapshot = { connected: true, host: String(configValue("OLT_ZTE_HOST")), model: "ZTE C300", hostname: await readSystemName(), transport: "SNMP v2c + Telnet", source: "real", syncedAt: Date.now(), onus };
-      cached = { expiresAt: Date.now() + 12000, value };
+      cached = { expiresAt: Date.now() + 4000, value };
       setTimeout(() => startDetailEnrichment(filteredRows), 250);
       return value;
     } finally { session.close(); }
