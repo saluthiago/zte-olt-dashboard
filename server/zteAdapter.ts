@@ -146,10 +146,10 @@ export async function getPonAvailability(pon: string) {
   finally { session.close(); }
 }
 
-export async function authorizeUnconfiguredOnu(input: { pon: string; serial: string; onuId: number; description?: string }) {
+export async function authorizeUnconfiguredOnu(input: { pon: string; serial: string; onuId: number; description?: string; commands?: string[] }) {
   if (!/^\d+\/\d+\/\d+$/.test(input.pon) || !/^[A-Za-z0-9_-]{8,32}$/.test(input.serial) || !Number.isInteger(input.onuId) || input.onuId < 1 || input.onuId > 128) throw new Error("Dados da ONU inválidos");
   const session = await TelnetSession.open();
-  try { await session.command("terminal length 0"); await session.command("config t"); await session.command(`interface gpon-olt_${input.pon}`); await session.command(`onu ${input.onuId} type ZTE-F680 sn ${input.serial}`); if (input.description?.trim()) { await session.command(`interface gpon-onu_${input.pon}:${input.onuId}`); await session.command(`name ${input.description.trim().slice(0, 64)}`); } await session.command("end"); cached = undefined; return { success: true as const, pon: input.pon, onuId: input.onuId, serial: input.serial, executedAt: Date.now() }; }
+  try { await session.command("terminal length 0"); await session.command("config t"); await session.command(`interface gpon-olt_${input.pon}`); await session.command(`onu ${input.onuId} type ZTE-F680 sn ${input.serial}`); await session.command(`interface gpon-onu_${input.pon}:${input.onuId}`); if (input.description?.trim()) await session.command(`name ${input.description.trim().slice(0, 64)}`); for (const command of input.commands ?? []) { const clean = command.trim(); if (clean && !/[\r\n;]/.test(clean)) await session.command(clean); } await session.command("end"); cached = undefined; return { success: true as const, pon: input.pon, onuId: input.onuId, serial: input.serial, appliedCommands: input.commands?.length ?? 0, executedAt: Date.now() }; }
   finally { session.close(); }
 }
 
