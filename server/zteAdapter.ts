@@ -209,7 +209,8 @@ function startDetailEnrichment(rows: StateRow[]) {
         try {
           const detail = parseOnuDetail(await session.command(`show gpon onu detail-info gpon-onu_${row.interfaceName}`));
           const signal = parseOnuPower(await session.command(`show pon power attenuation gpon-onu_${row.interfaceName}`));
-          const status = row.status === "online" && detail.online ? (signal < -27 ? "alerta" : "online") : "offline";
+          const hasValidSignal = Number.isFinite(signal) && signal > -90;
+          const status = row.status === "online" && detail.online && hasValidSignal ? (signal < -27 ? "alerta" : "online") : "offline";
           detailCache.set(row.interfaceName, { ...detail, signal, status });
         } catch (error) { console.warn(`[OLT] detail enrichment skipped for ${row.interfaceName}:`, error); }
       }
@@ -230,7 +231,7 @@ export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
       const filteredRows = Array.from(stateCache.values()).filter((row) => allowedSlots.has(Number(row.interfaceName.split("/")[1])));
       const onus = filteredRows.map((row) => {
         const detail = detailCache.get(row.interfaceName);
-        const status = detail ? (row.status === "offline" ? "offline" : detail.status) : row.status;
+        const status = detail ? (row.status === "offline" || detail.signal <= -90 ? "offline" : detail.status) : (row.status === "online" ? "offline" : row.status);
         return { id: row.interfaceName, serial: detail?.serial ?? "—", mac: "não informado", name: detail?.name ?? `ONU ${row.interfaceName}`, slot: row.interfaceName, status, signal: detail?.signal ?? -99, distance: detail?.distance ?? 0, uptime: detail?.uptime ?? "—", lastEvent: status === "offline" ? "ONU offline" : status === "alerta" ? "RX baixo" : detail ? "Sem alarmes" : "Aguardando leitura detalhada", profile: detail?.profile ?? "GPON" };
       });
       const value: LiveOltSnapshot = { connected: true, host: String(configValue("OLT_ZTE_HOST")), model: "ZTE C300", hostname: await readSystemName(), transport: "SNMP v2c + Telnet", source: "real", syncedAt: Date.now(), onus };
