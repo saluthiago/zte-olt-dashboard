@@ -60,7 +60,7 @@ type ONU = {
 };
 
 type EventItem = {
-  id: number;
+  id: string;
   type: "fiber" | "warning" | "power";
   title: string;
   detail: string;
@@ -269,7 +269,7 @@ export default function Home() {
     setRealtimeEvents((previous) => {
       const previousById = new Map(previous.map((event) => [event.detail.split(" · ")[0], event]));
       const currentOffline = liveSnapshot.data!.onus.filter((onu) => onu.status === "offline");
-      const fresh = currentOffline.filter((onu) => !previousById.has(onu.slot)).map((onu) => ({ id: Date.now() + Math.random(), type: "fiber" as const, title: "Desconexão de fibra detectada", detail: `${onu.slot} · ${onu.name}`, time: "agora", fresh: true }));
+      const fresh = currentOffline.filter((onu) => !previousById.has(onu.slot)).map((onu) => ({ id: `${onu.slot}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: "fiber" as const, title: "Desconexão de fibra detectada", detail: `${onu.slot} · ${onu.name}`, time: "agora", fresh: true }));
       return [...fresh, ...previous].slice(0, 30);
     });
   }, [liveSnapshot.data?.syncedAt]);
@@ -326,7 +326,7 @@ Esta ação será executada na OLT ZTE C300 real.`)) return;
       toast.warning("Aguardando dados reais", { description: "A OLT ainda não retornou nenhuma ONU." });
       return;
     }
-    const event: EventItem = { id: Date.now(), type: "fiber", title: "Teste de desconexão recebido", detail: `${target.slot} · ${target.name}`, time: "agora", fresh: true };
+    const event: EventItem = { id: `${target.slot}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: "fiber", title: "Teste de desconexão recebido", detail: `${target.slot} · ${target.name}`, time: "agora", fresh: true };
     setEvents((current) => [event, ...current].slice(0, 5));
     toast.warning("Eventos são somente da telemetria real", { description: "Nenhum evento manual é inserido no feed." });
   }
