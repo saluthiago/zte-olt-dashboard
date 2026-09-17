@@ -26,7 +26,7 @@ export type LiveOltSnapshot = {
   onus: LiveONU[];
 };
 
-export type OperatorAction = "authorize" | "disable" | "reboot";
+export type OperatorAction = "authorize" | "disable" | "deauthorize" | "reboot";
 export type OltConfig = {
   host: string;
   snmpPort: number;
@@ -131,7 +131,7 @@ class TelnetSession {
 
 function validateOnuId(onuId: string) { if (!/^\d+\/\d+\/\d+:\d+$/.test(onuId)) throw new Error("ONU identifier is invalid"); return onuId; }
 
-export async function executeOperatorAction(action: OperatorAction, onuId: string) { const target = validateOnuId(onuId); const session = await TelnetSession.open(); try { await session.command("terminal length 0"); await session.command("config t"); if (action === "reboot") { await session.command(`pon-onu-mng gpon-onu_${target}`); await session.command("reboot"); await session.command("yes"); } else { await session.command(`interface gpon-onu_${target}`); await session.command(action === "disable" ? "shutdown" : "no shutdown"); await session.command("end"); } return { success: true as const, action, onuId: target, executedAt: Date.now() }; } finally { session.close(); } }
+export async function executeOperatorAction(action: OperatorAction, onuId: string) { const target = validateOnuId(onuId); const session = await TelnetSession.open(); try { await session.command("terminal length 0"); await session.command("config t"); if (action === "reboot") { await session.command(`pon-onu-mng gpon-onu_${target}`); await session.command("reboot"); await session.command("yes"); } else if (action === "deauthorize") { const [pon, id] = target.split(":"); await session.command(`interface gpon-olt_${pon}`); await session.command(`no onu ${id}`); await session.command("end"); } else { await session.command(`interface gpon-onu_${target}`); await session.command(action === "disable" ? "disable" : "no shutdown"); await session.command("end"); } cached = undefined; return { success: true as const, action, onuId: target, executedAt: Date.now() }; } finally { session.close(); } }
 
 export async function getUnconfiguredOnus() {
   const session = await TelnetSession.open();
@@ -226,8 +226,13 @@ export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
     try {
       await session.command("terminal length 0");
       const stateRows = parseOnuState(await session.command("show gpon onu state"));
-      for (const row of stateRows) stateCache.set(row.interfaceName, row);
+      const currentIds = new Set(stateRows.map((row) => row.interfaceName));
       const allowedSlots = new Set(parseBoards(String(configValue("OLT_ZTE_BOARDS"))).map((board) => board.slot));
+      for (const key of Array.from(stateCache.keys())) {
+        const slot = Number(key.split("/")[1]);
+        if (allowedSlots.has(slot) && !currentIds.has(key)) { stateCache.delete(key); detailCache.delete(key); }
+      }
+      for (const row of stateRows) stateCache.set(row.interfaceName, row);
       const filteredRows = Array.from(stateCache.values()).filter((row) => allowedSlots.has(Number(row.interfaceName.split("/")[1])));
       const onus = filteredRows.map((row) => {
         const detail = detailCache.get(row.interfaceName);
