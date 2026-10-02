@@ -181,6 +181,7 @@ export async function authorizeUnconfiguredOnu(input: { pon: string; serial: str
     await session.command("terminal length 0");
     await enterConfigMode(session);
     const commands = (input.commands ?? []).map((command) => command.trim()).filter((command) => command && !/[\r\n;]/.test(command));
+    if (commands.some((command) => /\b(?:user-vlan|vlan)\s+(?:vlan|\{vlan\})\b/i.test(command))) throw new Error("Template inválido: informe uma VLAN numérica; o comando não foi enviado à OLT");
     const isFullTemplate = commands.some((command) => new RegExp(`^interface\\s+gpon-olt_${input.pon.replaceAll("/", "\\/")}$`, "i").test(command));
     if (isFullTemplate) {
       // Templates PPPoE/IPOE/OMCI-IPOE already contain the complete context sequence,

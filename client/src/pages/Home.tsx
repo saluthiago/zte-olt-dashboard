@@ -99,7 +99,8 @@ function normalizeSpeed(value: string, suffix: "UP" | "DOWN") {
 }
 
 function expandTemplate(body: string, values: Record<string, string | number>) {
-  return body.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).map((line) => line.replace(/\{([a-z0-9-]+)\}/gi, (_, key: string) => values[key.toLowerCase()] === undefined ? `{${key}}` : String(values[key.toLowerCase()])));
+  const vlan = String(values.vlan ?? "").trim();
+  return body.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).map((line) => line.replace(/\{([a-z0-9-]+)\}/gi, (_, key: string) => values[key.toLowerCase()] === undefined ? `{${key}}` : String(values[key.toLowerCase()])).replace(/\buser-vlan\s+vlan\b/gi, `user-vlan ${vlan}`).replace(/\bvlan\s+vlan\b/gi, `vlan ${vlan}`));
 }
 
 function statusMeta(status: ONUStatus) {
@@ -235,7 +236,9 @@ export default function Home() {
     const template = templates.find((item) => String(item.id) === provisionForm.templateId);
     const [slot, ponNumber] = pon.split("/").slice(1);
     const commands = template ? expandTemplate(template.body, { vlan: provisionForm.vlan, "onu-id": ponAvailability.data.nextOnuId, slot: slot ?? "", pon: ponNumber ?? "", "pon-path": pon ?? "", sn: targetSerial, description: provisionForm.description, upload: normalizeSpeed(provisionForm.upload, "UP"), download: normalizeSpeed(provisionForm.download, "DOWN"), "wifi-ssid": provisionForm.wifiSsid, "wifi-password": provisionForm.wifiPassword }) : [];
-    if (commands.some((command) => /\{[a-z0-9-]+\}/i.test(command))) { toast.warning("Preencha todas as variáveis do template"); return; }
+    const needsVlan = Boolean(template && /\b(?:user-vlan|vlan)\s+(?:vlan|\{vlan\})\b/i.test(template.body));
+    if (needsVlan && !/^\d{1,4}$/.test(provisionForm.vlan.trim())) { toast.warning("Informe uma VLAN numérica antes de autorizar"); return; }
+    if (commands.some((command) => /\{[a-z0-9-]+\}/i.test(command) || /\b(?:user-vlan|vlan)\s+vlan\b/i.test(command))) { toast.warning("Preencha corretamente todas as variáveis do template"); return; }
     if (!window.confirm(`Autorizar ${targetSerial} na PON ${pon}, vaga ${ponAvailability.data.nextOnuId}?\n\nTemplate: ${template?.name ?? "sem template"}\nComandos: ${commands.length}`)) return;
     authorizeUnconfigured.mutate({ pon, serial: targetSerial, onuId: ponAvailability.data.nextOnuId, description: provisionForm.description || undefined, commands }, { onSuccess: async () => { toast.success("ONU autorizada", { description: `${pon}:${ponAvailability.data?.nextOnuId}` }); await liveSnapshot.refetch(); await unconfiguredOnus.refetch(); }, onError: (error) => toast.error("Falha ao autorizar ONU", { description: error.message }) });
   }
