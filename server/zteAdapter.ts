@@ -118,6 +118,12 @@ export function firstFreeOnuId(output: string, max = 128): number | null {
   return null;
 }
 
+// CORREÇÃO 1: o prompt de modo de configuração da ZTE termina em "(config)#", "(config-if)#" etc.
+// O regex antigo /[A-Za-z0-9._-]+[#>]\s*$/ NÃO reconhecia esses prompts (o char antes do # é ")"),
+// fazendo o "config t" (e todos os comandos seguintes) caírem em timeout de 15s.
+const PROMPT_PATTERN = /[\w().\/:_-]*[#>]\s*$/;
+const COMMAND_ERROR_PATTERN = /(?:^|\n)\s*%[^\n]*(error|unknown|invalid|unrecognized|fail)[^\n]*/i;
+
 class TelnetSession {
   private socket: net.Socket;
   private buffer = "";
@@ -125,7 +131,29 @@ class TelnetSession {
   private constructor(socket: net.Socket) { this.socket = socket; socket.setEncoding("utf8"); socket.on("data", (chunk) => { const text = typeof chunk === "string" ? chunk : chunk.toString("utf8"); this.buffer += text; for (const listener of this.listeners) listener(text); }); }
   static async open() { const socket = await new Promise<net.Socket>((resolve, reject) => { const connection = net.createConnection({ host: String(configValue("OLT_ZTE_HOST")), port: Number(configValue("OLT_ZTE_TELNET_PORT")) }); connection.once("connect", () => resolve(connection)); connection.once("error", reject); }); const session = new TelnetSession(socket); await new Promise((resolve) => setTimeout(resolve, 500)); session.write(requiredEnv("OLT_ZTE_TELNET_USERNAME")); await new Promise((resolve) => setTimeout(resolve, 300)); session.write(requiredEnv("OLT_ZTE_TELNET_PASSWORD")); await new Promise((resolve) => setTimeout(resolve, 800)); return session; }
   private write(value: string) { this.socket.write(`${value}\r\n`); }
-  async command(command: string) { const start = this.buffer.length; this.write(command); const deadline = Date.now() + 15000; while (Date.now() < deadline) { const output = this.buffer.slice(start); const clean = output.replace(/[\u0000\u001b\u007f]/g, ""); if (/--?More--/i.test(clean)) this.socket.write(" "); const stateRowsSeen = (clean.match(/\d+\/\d+\/\d+:\d+/g) ?? []).length; if (command === "show gpon onu state" && (stateRowsSeen >= 100 || /ONU Number:\s*\d+/i.test(clean))) return clean; if (/Confirm to reboot\?\s*\[yes\/no\]:/i.test(clean)) return clean; if (/[A-Za-z0-9._-]+[#>]\s*$/m.test(clean)) return clean; await new Promise((resolve) => setTimeout(resolve, 150)); } const timedOut = this.buffer.slice(start).replace(/[\u0000\u001b\u007f]/g, ""); if (command === "show gpon onu state" && /\d+\/\d+\/\d+:\d+/.test(timedOut)) return timedOut; throw new Error(`Telnet command timeout: ${command}`); }
+  async command(command: string) {
+    const start = this.buffer.length;
+    this.write(command);
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      const output = this.buffer.slice(start);
+      const clean = output.replace(/[\u0000\u001b\u007f]/g, "");
+      if (/--?More--/i.test(clean)) this.socket.write(" ");
+      const stateRowsSeen = (clean.match(/\d+\/\d+\/\d+:\d+/g) ?? []).length;
+      if (command === "show gpon onu state" && (stateRowsSeen >= 100 || /ONU Number:\s*\d+/i.test(clean))) return clean;
+      if (/Confirm to reboot\?\s*\[yes\/no\]:/i.test(clean)) return clean;
+      if (PROMPT_PATTERN.test(clean)) {
+        // CORREÇÃO 1b: se a OLT rejeitou o comando, falhar com a mensagem real dela em vez de prosseguir em silêncio
+        const errorMatch = clean.match(COMMAND_ERROR_PATTERN);
+        if (errorMatch && command !== "show gpon onu state") throw new Error(`A OLT rejeitou o comando "${command}": ${errorMatch[0].trim()}`);
+        return clean;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const timedOut = this.buffer.slice(start).replace(/[\u0000\u001b\u007f]/g, "");
+    if (command === "show gpon onu state" && /\d+\/\d+\/\d+:\d+/.test(timedOut)) return timedOut;
+    throw new Error(`Timeout ao executar "${command}" na OLT (20s sem resposta). Verifique a conectividade Telnet.`);
+  }
   close() { this.socket.destroy(); }
 }
 
@@ -193,7 +221,13 @@ async function readSystemName() { const session = snmp.createSession(String(conf
 let cached: { expiresAt: number; value: LiveOltSnapshot } | undefined;
 let snapshotInFlight: Promise<LiveOltSnapshot> | undefined;
 let detailInFlight: Promise<void> | undefined;
-const detailCache = new Map<string, ReturnType<typeof parseOnuDetail> & { signal: number; status: LiveONU["status"] }>();
+
+// CORREÇÃO 2a: details agora têm TTL — uma falha ocasional de parse não apaga mais os dados na hora,
+// o que causava o efeito "zera e volta" no dashboard.
+const DETAIL_TTL_MS = 30 * 60 * 1000;
+const DETAIL_BATCH_SIZE = 16;
+type DetailEntry = ReturnType<typeof parseOnuDetail> & { signal: number; status: LiveONU["status"]; cachedAt: number };
+const detailCache = new Map<string, DetailEntry>();
 const stateCache = new Map<string, StateRow>();
 const missingStateCycles = new Map<string, number>();
 
@@ -205,7 +239,7 @@ async function enterConfigMode(session: TelnetSession) {
 function startDetailEnrichment(rows: StateRow[]) {
   if (detailInFlight) return;
   const pending = rows.filter((row) => !detailCache.has(row.interfaceName)).sort((a, b) => Number(b.status === "online") - Number(a.status === "online"));
-  const batch = pending.slice(0, 12);
+  const batch = pending.slice(0, DETAIL_BATCH_SIZE);
   if (!batch.length) return;
   detailInFlight = (async () => {
     const session = await TelnetSession.open();
@@ -217,7 +251,7 @@ function startDetailEnrichment(rows: StateRow[]) {
           const signal = parseOnuPower(await session.command(`show pon power attenuation gpon-onu_${row.interfaceName}`));
           const hasValidSignal = Number.isFinite(signal) && signal > -90;
           const status = row.status === "online" && detail.online && hasValidSignal ? (signal < -27 ? "alerta" : "online") : "offline";
-          detailCache.set(row.interfaceName, { ...detail, signal, status });
+          detailCache.set(row.interfaceName, { ...detail, signal, status, cachedAt: Date.now() });
         } catch (error) { console.warn(`[OLT] detail enrichment skipped for ${row.interfaceName}:`, error); }
       }
     } finally { session.close(); }
@@ -233,8 +267,8 @@ export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
       await session.command("terminal length 0");
       const stateRows = parseOnuState(await session.command("show gpon onu state"));
       const allowedSlots = new Set(parseBoards(String(configValue("OLT_ZTE_BOARDS"))).map((board) => board.slot));
-      // A transient empty/partial Telnet page must never erase the live inventory.
-      // Merge valid rows and only remove an ONU after two consecutive confirmed absences.
+      // Merge only a valid non-empty page; never erase the inventory on a partial/empty response.
+      // An ONU is removed only after two consecutive confirmed absences.
       if (stateRows.length > 0) {
         const currentIds = new Set(stateRows.map((row) => row.interfaceName));
         for (const row of stateRows) { stateCache.set(row.interfaceName, row); missingStateCycles.delete(row.interfaceName); }
@@ -249,7 +283,11 @@ export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
       const filteredRows = Array.from(stateCache.values()).filter((row) => allowedSlots.has(Number(row.interfaceName.split("/")[1])));
       const onus = filteredRows.map((row) => {
         const detail = detailCache.get(row.interfaceName);
-        const status = detail ? (row.status === "offline" || detail.signal <= -90 ? "offline" : detail.status) : (row.status === "online" ? "offline" : row.status);
+        // CORREÇÃO 2c: ONU online sem leitura detalhada agora MANTÉM o status real do estado
+        // (antes caía em "offline", fazendo o dashboard piscar offline/online com sinal -99).
+        const status = detail
+          ? (row.status === "offline" || detail.signal <= -90 ? "offline" : detail.status)
+          : row.status;
         return { id: row.interfaceName, serial: detail?.serial ?? "—", mac: "não informado", name: detail?.name ?? `ONU ${row.interfaceName}`, slot: row.interfaceName, status, signal: detail?.signal ?? -99, distance: detail?.distance ?? 0, uptime: detail?.uptime ?? "—", lastEvent: status === "offline" ? "ONU offline" : status === "alerta" ? "RX baixo" : detail ? "Sem alarmes" : "Aguardando leitura detalhada", profile: detail?.profile ?? "GPON" };
       });
       const value: LiveOltSnapshot = { connected: true, host: String(configValue("OLT_ZTE_HOST")), model: "ZTE C300", hostname: await readSystemName(), transport: "SNMP v2c + Telnet", source: "real", syncedAt: Date.now(), onus };
