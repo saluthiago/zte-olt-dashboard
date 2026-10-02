@@ -177,7 +177,28 @@ export async function getPonAvailability(pon: string) {
 export async function authorizeUnconfiguredOnu(input: { pon: string; serial: string; onuId: number; description?: string; commands?: string[] }) {
   if (!/^\d+\/\d+\/\d+$/.test(input.pon) || !/^[A-Za-z0-9_-]{8,32}$/.test(input.serial) || !Number.isInteger(input.onuId) || input.onuId < 1 || input.onuId > 128) throw new Error("Dados da ONU inválidos");
   const session = await TelnetSession.open();
-  try { await session.command("terminal length 0"); await enterConfigMode(session); await session.command(`interface gpon-olt_${input.pon}`); await session.command(`onu ${input.onuId} type ZTE-F680 sn ${input.serial}`); await session.command(`interface gpon-onu_${input.pon}:${input.onuId}`); if (input.description?.trim() && !(input.commands ?? []).some((command) => /^description\s/i.test(command.trim()))) await session.command(`description ${input.description.trim().slice(0, 64)}`); for (const command of input.commands ?? []) { const clean = command.trim(); if (clean && !/[\r\n;]/.test(clean)) await session.command(clean); } await session.command("end"); cached = undefined; return { success: true as const, pon: input.pon, onuId: input.onuId, serial: input.serial, appliedCommands: input.commands?.length ?? 0, executedAt: Date.now() }; }
+  try {
+    await session.command("terminal length 0");
+    await enterConfigMode(session);
+    const commands = (input.commands ?? []).map((command) => command.trim()).filter((command) => command && !/[\r\n;]/.test(command));
+    const isFullTemplate = commands.some((command) => new RegExp(`^interface\\s+gpon-olt_${input.pon.replaceAll("/", "\\/")}$`, "i").test(command));
+    if (isFullTemplate) {
+      // Templates PPPoE/IPOE/OMCI-IPOE already contain the complete context sequence,
+      // including exit between gpon-olt and gpon-onu. Execute them from config mode.
+      for (const command of commands) await session.command(command);
+    } else {
+      // C300 requires leaving interface gpon-olt before entering interface gpon-onu.
+      await session.command(`interface gpon-olt_${input.pon}`);
+      await session.command(`onu ${input.onuId} type ZTE-F680 sn ${input.serial}`);
+      await session.command("exit");
+      await session.command(`interface gpon-onu_${input.pon}:${input.onuId}`);
+      if (input.description?.trim() && !commands.some((command) => /^description\s/i.test(command))) await session.command(`description ${input.description.trim().slice(0, 64)}`);
+      for (const command of commands) await session.command(command);
+    }
+    if (!isFullTemplate) await session.command("end");
+    cached = undefined;
+    return { success: true as const, pon: input.pon, onuId: input.onuId, serial: input.serial, appliedCommands: commands.length, executedAt: Date.now() };
+  }
   finally { session.close(); }
 }
 
@@ -191,7 +212,7 @@ export async function moveOnu(input: { source: string; targetPon: string; target
     const interfaceCommands = sourceConfig.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !/^interface\s|^!$|^end$/i.test(line));
     await enterConfigMode(session);
     await session.command(`interface gpon-olt_${sourcePon}`); await session.command(`no onu ${sourceId}`);
-    await session.command(`interface gpon-olt_${input.targetPon}`); await session.command(`onu ${input.targetOnuId} type ZTE-F680 sn ${input.serial}`);
+    await session.command(`interface gpon-olt_${input.targetPon}`); await session.command(`onu ${input.targetOnuId} type ZTE-F680 sn ${input.serial}`); await session.command("exit");
     await session.command(`interface gpon-onu_${input.targetPon}:${input.targetOnuId}`);
     for (const command of interfaceCommands) if (!/^onu\s+/i.test(command)) await session.command(command);
     await session.command("end"); cached = undefined; return { success: true as const, source: input.source, target: `${input.targetPon}:${input.targetOnuId}`, serial: input.serial, copiedCommands: interfaceCommands.length, executedAt: Date.now() };
