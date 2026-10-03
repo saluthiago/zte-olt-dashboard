@@ -170,11 +170,11 @@ export async function executeOperatorAction(action: OperatorAction, onuId: strin
 export function parseNetworkConfig(output: string): OltNetworkEntry[] {
   const entries: OltNetworkEntry[] = [];
   let current: { interfaceName: string; vlan: string; ip: string; mask: string; gateway: string } | undefined;
-  const flush = () => { if (current) entries.push({ name: current.interfaceName, ...current, source: "olt" }); };
+  const flush = () => { if (current && (current.vlan || current.ip)) entries.push({ name: current.interfaceName, ...current, source: "olt" }); };
   for (const raw of output.split(/\r?\n/)) {
     const line = raw.trim();
     const iface = line.match(/^interface\s+(\S+)/i);
-    if (iface) { flush(); current = { interfaceName: iface[1], vlan: "", ip: "", mask: "", gateway: "" }; continue; }
+    if (iface) { flush(); const vlanif = iface[1].match(/^vlanif[_-]?(\d+)$/i); current = { interfaceName: iface[1], vlan: vlanif?.[1] ?? "", ip: "", mask: "", gateway: "" }; continue; }
     const vlan = line.match(/^(?:vlan|user-vlan)\s+(\d+)/i);
     const ip = line.match(/^ip\s+address\s+(\S+)(?:\s+(\S+))?/i);
     const gateway = line.match(/^(?:ip\s+default-gateway|default-router)\s+(\S+)/i);
@@ -187,10 +187,17 @@ export function parseNetworkConfig(output: string): OltNetworkEntry[] {
   return Array.from(new Map(entries.map((entry) => [`${entry.interfaceName}-${entry.vlan}-${entry.ip}`, entry])).values());
 }
 
+let networkConfigCache: { expiresAt: number; value: OltNetworkEntry[] } | undefined;
+const NETWORK_CONFIG_TTL_MS = 5 * 60 * 1000;
 export async function getOltNetworkConfig() {
+  if (networkConfigCache && networkConfigCache.expiresAt > Date.now()) return networkConfigCache.value;
   const session = await TelnetSession.open();
-  try { await session.command("terminal length 0"); return parseNetworkConfig(await session.command("show running-config")); }
-  finally { session.close(); }
+  try {
+    await session.command("terminal length 0");
+    const value = parseNetworkConfig(await session.command("show running-config"));
+    networkConfigCache = { value, expiresAt: Date.now() + NETWORK_CONFIG_TTL_MS };
+    return value;
+  } finally { session.close(); }
 }
 
 export async function runOltTerminalCommand(command: string) {
