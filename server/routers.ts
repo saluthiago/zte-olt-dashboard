@@ -2,7 +2,7 @@ import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
-import { authorizeUnconfiguredOnu, executeOperatorAction, moveOnu, getLiveOltSnapshot, getOltConfig, getPonAvailability, getUnconfiguredOnus, updateOltConfig, updateOnuDescription } from "./zteAdapter";
+import { authorizeUnconfiguredOnu, executeOperatorAction, moveOnu, getLiveOltSnapshot, getOltConfig, getPonAvailability, getUnconfiguredOnus, getOltNetworkConfig, runOltTerminalCommand, updateOltConfig, updateOnuDescription } from "./zteAdapter";
 import { z } from "zod";
 
 export const appRouter = router({
@@ -24,6 +24,8 @@ export const appRouter = router({
     unconfiguredOnus: publicProcedure.query(() => getUnconfiguredOnus()),
     ponAvailability: publicProcedure.input(z.object({ pon: z.string().regex(/^\d+\/\d+\/\d+$/) })).query(({ input }) => getPonAvailability(input.pon)),
     config: publicProcedure.query(() => getOltConfig()),
+    networkConfig: publicProcedure.query(() => getOltNetworkConfig()),
+    terminal: publicProcedure.input(z.object({ command: z.string().trim().min(1).max(240) })).mutation(({ input }) => runOltTerminalCommand(input.command)),
     updateConfig: publicProcedure.input(z.object({ host: z.string(), snmpPort: z.number(), telnetPort: z.number(), boards: z.string() })).mutation(({ input }) => updateOltConfig(input)),
     updateDescription: publicProcedure.input(z.object({ onuId: z.string().regex(/^\d+\/\d+\/\d+:\d+$/, "Identificador de ONU inválido"), description: z.string().trim().min(1).max(64) })).mutation(({ input }) => updateOnuDescription(input.onuId, input.description)),
     moveOnu: publicProcedure.input(z.object({ source: z.string().regex(/^\d+\/\d+\/\d+:\d+$/), targetPon: z.string().regex(/^\d+\/\d+\/\d+$/), targetOnuId: z.number().int().min(1).max(128), serial: z.string().regex(/^[A-Za-z0-9_-]{8,32}$/) })).mutation(({ input }) => moveOnu(input)),

@@ -27,6 +27,8 @@ export type LiveOltSnapshot = {
 };
 
 export type OperatorAction = "authorize" | "disable" | "deauthorize" | "reboot";
+export type OltNetworkEntry = { name: string; interfaceName: string; vlan: string; ip: string; mask: string; gateway: string; source: "olt" };
+
 export type OltConfig = {
   host: string;
   snmpPort: number;
@@ -164,6 +166,43 @@ class TelnetSession {
 function validateOnuId(onuId: string) { if (!/^\d+\/\d+\/\d+:\d+$/.test(onuId)) throw new Error("ONU identifier is invalid"); return onuId; }
 
 export async function executeOperatorAction(action: OperatorAction, onuId: string) { const target = validateOnuId(onuId); const session = await TelnetSession.open(); try { await session.command("terminal length 0"); await enterConfigMode(session); if (action === "reboot") { await session.command(`pon-onu-mng gpon-onu_${target}`); await session.command("reboot"); await session.command("yes"); } else if (action === "deauthorize") { const [pon, id] = target.split(":"); await session.command(`interface gpon-olt_${pon}`); await session.command(`no onu ${id}`); await session.command("end"); } else { await session.command(`interface gpon-onu_${target}`); await session.command(action === "disable" ? "disable" : "no shutdown"); await session.command("end"); } cached = undefined; scheduleOltRefresh(); return { success: true as const, action, onuId: target, executedAt: Date.now() }; } finally { session.close(); } }
+
+export function parseNetworkConfig(output: string): OltNetworkEntry[] {
+  const entries: OltNetworkEntry[] = [];
+  let current: { interfaceName: string; vlan: string; ip: string; mask: string; gateway: string } | undefined;
+  const flush = () => { if (current) entries.push({ name: current.interfaceName, ...current, source: "olt" }); };
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.trim();
+    const iface = line.match(/^interface\s+(\S+)/i);
+    if (iface) { flush(); current = { interfaceName: iface[1], vlan: "", ip: "", mask: "", gateway: "" }; continue; }
+    const vlan = line.match(/^(?:vlan|user-vlan)\s+(\d+)/i);
+    const ip = line.match(/^ip\s+address\s+(\S+)(?:\s+(\S+))?/i);
+    const gateway = line.match(/^(?:ip\s+default-gateway|default-router)\s+(\S+)/i);
+    if (current && vlan) current.vlan = vlan[1];
+    if (current && ip) { current.ip = ip[1]; current.mask = ip[2] ?? ""; }
+    if (current && gateway) current.gateway = gateway[1];
+    if (!current && vlan) entries.push({ name: `VLAN ${vlan[1]}`, interfaceName: "vlan-database", vlan: vlan[1], ip: "", mask: "", gateway: "", source: "olt" });
+  }
+  flush();
+  return Array.from(new Map(entries.map((entry) => [`${entry.interfaceName}-${entry.vlan}-${entry.ip}`, entry])).values());
+}
+
+export async function getOltNetworkConfig() {
+  const session = await TelnetSession.open();
+  try { await session.command("terminal length 0"); return parseNetworkConfig(await session.command("show running-config")); }
+  finally { session.close(); }
+}
+
+export async function runOltTerminalCommand(command: string) {
+  const clean = command.trim();
+  if (!clean || clean.length > 240 || /[\r\n;]/.test(clean)) throw new Error("Comando inválido: use uma única linha com até 240 caracteres");
+  const session = await TelnetSession.open();
+  try {
+    await session.command("terminal length 0");
+    if (/^(configure terminal|config(ure)? t)$/i.test(clean)) { await enterConfigMode(session); return { command: clean, output: "Modo configure terminal confirmado pela OLT.", executedAt: Date.now() }; }
+    return { command: clean, output: await session.command(clean), executedAt: Date.now() };
+  } finally { session.close(); }
+}
 
 export async function getUnconfiguredOnus() {
   const session = await TelnetSession.open();
