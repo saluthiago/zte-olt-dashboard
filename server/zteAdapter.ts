@@ -195,12 +195,21 @@ export async function getOltNetworkConfig() {
 
 export async function runOltTerminalCommand(command: string) {
   const clean = command.trim();
-  if (!clean || clean.length > 240 || /[\r\n;]/.test(clean)) throw new Error("Comando inválido: use uma única linha com até 240 caracteres");
+  if (!clean || clean.length > 4000) throw new Error("Comando inválido ou script maior que 4000 caracteres");
+  const lines = clean.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const session = await TelnetSession.open();
+  const output: string[] = [];
   try {
     await session.command("terminal length 0");
-    if (/^(configure terminal|config(ure)? t)$/i.test(clean)) { await enterConfigMode(session); return { command: clean, output: "Modo configure terminal confirmado pela OLT.", executedAt: Date.now() }; }
-    return { command: clean, output: await session.command(clean), executedAt: Date.now() };
+    for (const line of lines) {
+      if (/^(configure terminal|config(ure)? t)$/i.test(line)) {
+        await enterConfigMode(session);
+        output.push(`${line}\nModo configure terminal confirmado pela OLT.`);
+      } else {
+        output.push(`${line}\n${await session.command(line)}`);
+      }
+    }
+    return { command: clean, output: output.join("\n\n"), executedAt: Date.now() };
   } finally { session.close(); }
 }
 
