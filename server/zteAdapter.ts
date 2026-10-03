@@ -71,6 +71,7 @@ export function updateOltConfig(input: Pick<OltConfig, "host" | "snmpPort" | "te
 }
 
 type StateRow = { interfaceName: string; status: "online" | "offline" };
+const stateCauseCache = new Map<string, string>();
 
 function parseBoards(value: string) {
   return value.split(",").map((entry) => {
@@ -83,7 +84,9 @@ export function parseOnuState(output: string): StateRow[] {
   const rows: StateRow[] = [];
   const rowPattern = /(\d+\/\d+\/\d+:\d+)\s+(enable|disable)\s+\S+\s+(working|offline|OffLine|DyingGasp|LOS)/gi;
   for (const match of Array.from(output.matchAll(rowPattern))) {
-    rows.push({ interfaceName: match[1], status: match[3].toLowerCase() === "working" ? "online" : "offline" });
+    const cause = match[3].toLowerCase();
+    stateCauseCache.set(match[1], cause);
+    rows.push({ interfaceName: match[1], status: cause === "working" ? "online" : "offline" });
   }
   return rows;
 }
@@ -93,7 +96,8 @@ export function parseOnuDetail(output: string) {
   const distance = output.match(/ONU Distance:\s*(\d+)m/i)?.[1];
   const phase = value("Phase state").toLowerCase();
   const state = value("State").toLowerCase();
-  return { name: value("Description") || value("Name") || "ONU sem descrição", serial: value("Serial number") || "—", distance: distance ? Number(distance) / 1000 : 0, uptime: value("Online Duration") || "—", profile: value("Type") || "GPON", online: phase === "working" || state === "ready" };
+  const mac = value("MAC address") || value("MAC") || value("Mac address") || output.match(/\b(?:MAC|MAC address)\s*[:=]\s*([0-9A-F]{2}(?::|-)[0-9A-F]{2}(?::|-)[0-9A-F]{2}(?::|-)[0-9A-F]{2}(?::|-)[0-9A-F]{2}(?::|-)[0-9A-F]{2})/i)?.[1] || "não informado";
+  return { name: value("Description") || value("Name") || "ONU sem descrição", serial: value("Serial number") || "—", mac: mac.replaceAll("-", ":").toUpperCase(), distance: distance ? Number(distance) / 1000 : 0, uptime: value("Online Duration") || "—", profile: value("Type") || "GPON", online: phase === "working" || state === "ready" };
 }
 
 export function parseOnuPower(output: string) {
@@ -159,7 +163,7 @@ class TelnetSession {
 
 function validateOnuId(onuId: string) { if (!/^\d+\/\d+\/\d+:\d+$/.test(onuId)) throw new Error("ONU identifier is invalid"); return onuId; }
 
-export async function executeOperatorAction(action: OperatorAction, onuId: string) { const target = validateOnuId(onuId); const session = await TelnetSession.open(); try { await session.command("terminal length 0"); await enterConfigMode(session); if (action === "reboot") { await session.command(`pon-onu-mng gpon-onu_${target}`); await session.command("reboot"); await session.command("yes"); } else if (action === "deauthorize") { const [pon, id] = target.split(":"); await session.command(`interface gpon-olt_${pon}`); await session.command(`no onu ${id}`); await session.command("end"); } else { await session.command(`interface gpon-onu_${target}`); await session.command(action === "disable" ? "disable" : "no shutdown"); await session.command("end"); } cached = undefined; return { success: true as const, action, onuId: target, executedAt: Date.now() }; } finally { session.close(); } }
+export async function executeOperatorAction(action: OperatorAction, onuId: string) { const target = validateOnuId(onuId); const session = await TelnetSession.open(); try { await session.command("terminal length 0"); await enterConfigMode(session); if (action === "reboot") { await session.command(`pon-onu-mng gpon-onu_${target}`); await session.command("reboot"); await session.command("yes"); } else if (action === "deauthorize") { const [pon, id] = target.split(":"); await session.command(`interface gpon-olt_${pon}`); await session.command(`no onu ${id}`); await session.command("end"); } else { await session.command(`interface gpon-onu_${target}`); await session.command(action === "disable" ? "disable" : "no shutdown"); await session.command("end"); } cached = undefined; scheduleOltRefresh(); return { success: true as const, action, onuId: target, executedAt: Date.now() }; } finally { session.close(); } }
 
 export async function getUnconfiguredOnus() {
   const session = await TelnetSession.open();
@@ -197,8 +201,12 @@ export async function authorizeUnconfiguredOnu(input: { pon: string; serial: str
       for (const command of commands) await session.command(command);
     }
     if (!isFullTemplate) await session.command("end");
+    const authorizedId = `${input.pon}:${input.onuId}`;
+    stateCache.delete(authorizedId);
+    detailCache.delete(authorizedId);
     cached = undefined;
-    return { success: true as const, pon: input.pon, onuId: input.onuId, serial: input.serial, appliedCommands: commands.length, executedAt: Date.now() };
+    scheduleOltRefresh(700);
+    return { success: true as const, pon: input.pon, onuId: input.onuId, serial: input.serial, appliedCommands: commands.length, refreshScheduled: true, executedAt: Date.now() };
   }
   finally { session.close(); }
 }
@@ -216,7 +224,7 @@ export async function moveOnu(input: { source: string; targetPon: string; target
     await session.command(`interface gpon-olt_${input.targetPon}`); await session.command(`onu ${input.targetOnuId} type ZTE-F680 sn ${input.serial}`); await session.command("exit");
     await session.command(`interface gpon-onu_${input.targetPon}:${input.targetOnuId}`);
     for (const command of interfaceCommands) if (!/^onu\s+/i.test(command)) await session.command(command);
-    await session.command("end"); cached = undefined; return { success: true as const, source: input.source, target: `${input.targetPon}:${input.targetOnuId}`, serial: input.serial, copiedCommands: interfaceCommands.length, executedAt: Date.now() };
+    await session.command("end"); cached = undefined; scheduleOltRefresh(); return { success: true as const, source: input.source, target: `${input.targetPon}:${input.targetOnuId}`, serial: input.serial, copiedCommands: interfaceCommands.length, executedAt: Date.now() };
   }
   finally { session.close(); }
 }
@@ -234,6 +242,7 @@ export async function updateOnuDescription(onuId: string, description: string) {
     await session.command("end");
     detailCache.delete(target);
     cached = undefined;
+    scheduleOltRefresh();
     return { success: true as const, onuId: target, description: cleanDescription, updatedAt: Date.now() };
   } finally { session.close(); }
 }
@@ -280,6 +289,10 @@ function startDetailEnrichment(rows: StateRow[]) {
   })().finally(() => { detailInFlight = undefined; cached = undefined; });
 }
 
+function scheduleOltRefresh(delay = 350) {
+  setTimeout(() => { getLiveOltSnapshot().catch((error) => console.warn("[OLT] refresh after operation skipped:", error)); }, delay);
+}
+
 export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
   if (cached && cached.expiresAt > Date.now()) return cached.value;
   if (snapshotInFlight) return snapshotInFlight;
@@ -298,7 +311,7 @@ export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
           const slot = Number(key.split("/")[1]);
           if (!allowedSlots.has(slot) || currentIds.has(key)) continue;
           const cycles = (missingStateCycles.get(key) ?? 0) + 1;
-          if (cycles >= 2) { stateCache.delete(key); detailCache.delete(key); missingStateCycles.delete(key); }
+          if (cycles >= 2) { stateCache.delete(key); detailCache.delete(key); stateCauseCache.delete(key); missingStateCycles.delete(key); }
           else missingStateCycles.set(key, cycles);
         }
       }
@@ -310,7 +323,7 @@ export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
         const status = detail
           ? (row.status === "offline" || detail.signal <= -90 ? "offline" : detail.status)
           : row.status;
-        return { id: row.interfaceName, serial: detail?.serial ?? "—", mac: "não informado", name: detail?.name ?? `ONU ${row.interfaceName}`, slot: row.interfaceName, status, signal: detail?.signal ?? -99, distance: detail?.distance ?? 0, uptime: detail?.uptime ?? "—", lastEvent: status === "offline" ? "ONU offline" : status === "alerta" ? "RX baixo" : detail ? "Sem alarmes" : "Aguardando leitura detalhada", profile: detail?.profile ?? "GPON" };
+        return { id: row.interfaceName, serial: detail?.serial ?? "—", mac: detail?.mac ?? "não informado", name: detail?.name ?? `ONU ${row.interfaceName}`, slot: row.interfaceName, status, signal: detail?.signal ?? -99, distance: detail?.distance ?? 0, uptime: detail?.uptime ?? "—", lastEvent: status === "offline" ? (stateCauseCache.get(row.interfaceName) === "dyinggasp" ? "Sem energia (Dying Gasp)" : stateCauseCache.get(row.interfaceName) === "los" ? "Fibra desconectada (LOS)" : "ONU offline") : status === "alerta" ? "RX baixo" : detail ? "Sem alarmes" : "Aguardando leitura detalhada", profile: detail?.profile ?? "GPON" };
       });
       const value: LiveOltSnapshot = { connected: true, host: String(configValue("OLT_ZTE_HOST")), model: "ZTE C300", hostname: await readSystemName(), transport: "SNMP v2c + Telnet", source: "real", syncedAt: Date.now(), onus };
       cached = { expiresAt: Date.now() + 4000, value };

@@ -31,13 +31,18 @@
 
 :root {
   --radius: 0.75rem;
-  --background: #07111e;
+  /* Paleta XtremNet: azul-noite, ciano de fibra e magenta do logotipo */
+  --brand-navy: #07111e;
+  --brand-cyan: #67e8f9;
+  --brand-magenta: #e9a8ff;
+  --brand-rose: #fb7185;
+  --background: var(--brand-navy);
   --foreground: #e2e8f0;
   --card: #0b1a2a;
   --card-foreground: #e2e8f0;
   --popover: #0d1d2e;
   --popover-foreground: #e2e8f0;
-  --primary: #67e8f9;
+  --primary: var(--brand-cyan);
   --primary-foreground: #07111e;
   --secondary: #122436;
   --secondary-foreground: #cbd5e1;
@@ -49,7 +54,7 @@
   --destructive-foreground: #fff1f2;
   --border: #1d3349;
   --input: #1d3349;
-  --ring: #67e8f9;
+  --ring: var(--brand-cyan);
 }
 
 * { box-sizing: border-box; }

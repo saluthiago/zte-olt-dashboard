@@ -143,3 +143,42 @@ sudo systemctl restart olt-ops
 Restrinja o acesso ao Telnet/SNMP por firewall e VLAN de gerência. Não exponha as portas `7326` ou `7361` na Internet. Prefira uma VPN ou ACL permitindo somente o IP do servidor. Troque as credenciais padrão, use TLS no domínio, faça backup do banco e limite o acesso ao menu Users a administradores.
 
 O menu **Users** da interface 1.0 cadastra perfis de administrador, operador e técnico; o perfil técnico é apresentado como limitado ao tempo real. Para uma instalação com autenticação local independente do OAuth, implemente um provedor de identidade ou reverse proxy autenticado antes de expor o painel à Internet.
+
+
+## 9. Arquivos, linguagem e protocolos
+
+Arquivos principais entregues:
+
+- `client/src/pages/Home.tsx`: dashboard, formulários de operação, Users, Interfaces/VLANs/IPs, logs locais e identidade visual.
+- `client/src/index.css`: tokens da paleta XtremNet (azul-noite, ciano e magenta).
+- `server/zteAdapter.ts`: Telnet, SNMP, parser de estado, MAC, sinal RX, distância, status LOS/Dying Gasp e comandos ZTE.
+- `server/routers.ts`: contratos tRPC entre navegador e servidor.
+- `deploy/nginx/olt.manianet.com.br.conf`: proxy reverso Nginx.
+- `docs/DEPLOY_DEBIAN.md`: este passo a passo.
+
+A linguagem do frontend e backend é **TypeScript**. O navegador usa React 19, o servidor usa Node.js/Express/tRPC e o build de produção fica em `dist/`. A telemetria usa **SNMP v2c sobre UDP** (na sua instalação, porta externa 7361 encaminhada para UDP/161) e os comandos usam **Telnet sobre TCP/7326**. O dashboard consulta estado a cada 5 segundos e, depois de autorizar, desautorizar, reboot, ativar, desativar ou mover uma ONU, dispara leituras imediatas em rajada para capturar estado, MAC, sinal, distância e descrição.
+
+### MAC e estados sem energia
+
+O parser tenta ler `MAC address`, `MAC` ou `Mac address` no `show gpon onu detail-info`. Para ONUs offline, o evento diferencia `LOS` (fibra desconectada), `DyingGasp` (perda de energia) e offline genérico. A OLT precisa expor esses campos no retorno Telnet; se o firmware não os fornecer, a tela mostra `não informado`.
+
+### Onde ficam os dados locais da interface
+
+Nesta versão, templates, perfis de OLT, Users, logs de operação, interfaces/VLANs/IPs e logo ficam no `localStorage` do navegador. Isso é adequado para operação inicial em um único navegador, mas não é uma autenticação ou auditoria centralizada. Para uso com vários técnicos, migre esses itens para tabelas MySQL e armazene senhas somente com hash, nunca em texto puro.
+
+### Instalação sem Git
+
+Se você receber um ZIP em vez de um repositório, copie a pasta completa para `/opt/zte-olt-dashboard`, incluindo `package.json`, `pnpm-lock.yaml`, `client/`, `server/`, `shared/`, `drizzle/`, `deploy/`, `docs/` e `.env`. Depois execute os mesmos comandos de `pnpm install` até `pnpm build`. Não copie `node_modules` nem `dist` de outro sistema.
+
+### Verificação final
+
+```bash
+curl -I http://127.0.0.1:3000
+sudo systemctl status olt-ops --no-pager
+sudo nginx -t
+# Teste a partir do servidor Debian:
+nc -vz 45.162.123.46 7326
+nc -vzu 45.162.123.46 7361
+```
+
+Antes de liberar o domínio, confirme que o firewall permite somente HTTP/HTTPS para o público e que SNMP/Telnet são acessíveis apenas pelo IP do servidor ou pela VPN de gerência.
