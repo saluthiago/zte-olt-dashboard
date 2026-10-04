@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
+import { InsertUser, users, operatorAccounts, operationLogs } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -90,3 +90,10 @@ export async function getUserByOpenId(openId: string) {
 }
 
 // TODO: add feature queries here as your schema grows.
+
+
+export async function listOperatorAccounts() { const db = await getDb(); if (!db) return []; return db.select({ id: operatorAccounts.id, name: operatorAccounts.name, email: operatorAccounts.email, username: operatorAccounts.username, role: operatorAccounts.role, createdAt: operatorAccounts.createdAt }).from(operatorAccounts).orderBy(desc(operatorAccounts.createdAt)); }
+export async function saveOperatorAccount(input: { id?: number; name: string; email?: string; username: string; passwordHash?: string; role: "tecnico"|"operador"|"admin" }) { const db = await getDb(); if (!db) throw new Error("Banco de dados indisponível"); if (input.id) { const update: Record<string, unknown> = { name: input.name, email: input.email || null, username: input.username, role: input.role }; if (input.passwordHash) update.passwordHash = input.passwordHash; await db.update(operatorAccounts).set(update).where(eq(operatorAccounts.id, input.id)); return input.id; } const result = await db.insert(operatorAccounts).values({ name: input.name, email: input.email || null, username: input.username, passwordHash: input.passwordHash || "", role: input.role }); return Number(result[0].insertId); }
+export async function deleteOperatorAccount(id: number) { const db = await getDb(); if (!db) throw new Error("Banco de dados indisponível"); await db.delete(operatorAccounts).where(eq(operatorAccounts.id, id)); return { success: true }; }
+export async function listOperationLogs(limit = 100) { const db = await getDb(); if (!db) return []; return db.select().from(operationLogs).orderBy(desc(operationLogs.createdAt)).limit(limit); }
+export async function insertOperationLog(input: { action: string; onu?: string; operatorOpenId?: string; operatorName?: string; commands: string[] }) { const db = await getDb(); if (!db) throw new Error("Banco de dados indisponível"); await db.insert(operationLogs).values(input); return { success: true }; }

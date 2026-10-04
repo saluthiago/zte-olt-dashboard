@@ -8,6 +8,13 @@
       "when": 1789350807609,
       "tag": "0000_productive_warhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1791153958003,
+      "tag": "0001_free_earthquake",
+      "breakpoints": true
     }
   ]
 }
