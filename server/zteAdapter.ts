@@ -24,6 +24,7 @@ export type LiveOltSnapshot = {
   source: "real";
   syncedAt: number;
   onus: LiveONU[];
+  powerOffCount: number;
 };
 
 export type OperatorAction = "authorize" | "disable" | "deauthorize" | "reboot";
@@ -98,8 +99,9 @@ export function parseOnuDetail(output: string) {
   const distance = output.match(/ONU Distance:\s*(\d+)m/i)?.[1];
   const phase = value("Phase state").toLowerCase();
   const state = value("State").toLowerCase();
-  const mac = value("MAC address") || value("MAC") || value("Mac address") || output.match(/\b(?:MAC|MAC address)\s*[:=]\s*([0-9A-F]{2}(?::|-)[0-9A-F]{2}(?::|-)[0-9A-F]{2}(?::|-)[0-9A-F]{2}(?::|-)[0-9A-F]{2}(?::|-)[0-9A-F]{2})/i)?.[1] || "não informado";
-  return { name: value("Description") || value("Name") || "ONU sem descrição", serial: value("Serial number") || "—", mac: mac.replaceAll("-", ":").toUpperCase(), distance: distance ? Number(distance) / 1000 : 0, uptime: value("Online Duration") || "—", profile: value("Type") || "GPON", online: phase === "working" || state === "ready" };
+  const mac = value("MAC address") || value("MAC") || value("Mac address") || output.match(/\bMAC(?:\s+address)?\s*[:=]?\s*([0-9A-F]{2}(?:(?::|-)[0-9A-F]{2}){5}|[0-9A-F]{4}(?:\.[0-9A-F]{4}){2})/i)?.[1] || "não informado";
+  const normalizedMac = mac.replace(/[.:-]/g, "").match(/.{2}/g)?.join(":").toUpperCase() ?? "não informado";
+  return { name: value("Description") || value("Name") || "ONU sem descrição", serial: value("Serial number") || "—", mac: normalizedMac, distance: distance ? Number(distance) / 1000 : 0, uptime: value("Online Duration") || "—", profile: value("Type") || "GPON", online: phase === "working" || state === "ready" };
 }
 
 export function parseOnuPower(output: string) {
@@ -380,7 +382,7 @@ export async function getLiveOltSnapshot(): Promise<LiveOltSnapshot> {
           : row.status;
         return { id: row.interfaceName, serial: detail?.serial ?? "—", mac: detail?.mac ?? "não informado", name: detail?.name ?? `ONU ${row.interfaceName}`, slot: row.interfaceName, status, signal: detail?.signal ?? -99, distance: detail?.distance ?? 0, uptime: detail?.uptime ?? "—", lastEvent: status === "offline" ? (stateCauseCache.get(row.interfaceName) === "dyinggasp" ? "Sem energia (Dying Gasp)" : stateCauseCache.get(row.interfaceName) === "los" ? "Fibra desconectada (LOS)" : "ONU offline") : status === "alerta" ? "RX baixo" : detail ? "Sem alarmes" : "Aguardando leitura detalhada", profile: detail?.profile ?? "GPON" };
       });
-      const value: LiveOltSnapshot = { connected: true, host: String(configValue("OLT_ZTE_HOST")), model: "ZTE C300", hostname: await readSystemName(), transport: "SNMP v2c + Telnet", source: "real", syncedAt: Date.now(), onus };
+      const value: LiveOltSnapshot = { connected: true, host: String(configValue("OLT_ZTE_HOST")), model: "ZTE C300", hostname: await readSystemName(), transport: "SNMP v2c + Telnet", source: "real", syncedAt: Date.now(), powerOffCount: onus.filter((onu) => onu.lastEvent === "Sem energia (Dying Gasp)").length, onus };
       cached = { expiresAt: Date.now() + 4000, value };
       setTimeout(() => startDetailEnrichment(filteredRows), 250);
       return value;
