@@ -1,6 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { InsertUser, users, operatorAccounts, operationLogs } from "../drizzle/schema";
+import { hashOperatorPassword } from "./localAuth";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -97,3 +98,6 @@ export async function saveOperatorAccount(input: { id?: number; name: string; em
 export async function deleteOperatorAccount(id: number) { const db = await getDb(); if (!db) throw new Error("Banco de dados indisponível"); await db.delete(operatorAccounts).where(eq(operatorAccounts.id, id)); return { success: true }; }
 export async function listOperationLogs(limit = 100) { const db = await getDb(); if (!db) return []; return db.select().from(operationLogs).orderBy(desc(operationLogs.createdAt)).limit(limit); }
 export async function insertOperationLog(input: { action: string; onu?: string; operatorOpenId?: string; operatorName?: string; commands: string[] }) { const db = await getDb(); if (!db) throw new Error("Banco de dados indisponível"); await db.insert(operationLogs).values(input); return { success: true }; }
+
+export async function getOperatorByUsername(username: string) { const db = await getDb(); if (!db) return undefined; const result = await db.select().from(operatorAccounts).where(eq(operatorAccounts.username, username)).limit(1); return result[0]; }
+export async function ensureInitialOperator() { const username = process.env.OLT_ADMIN_USERNAME?.trim(); const password = process.env.OLT_ADMIN_PASSWORD; if (!username || !password) return; const existing = await getOperatorByUsername(username); if (existing) return; const db = await getDb(); if (!db) return; await db.insert(operatorAccounts).values({ name: process.env.OLT_ADMIN_NAME?.trim() || "Administrador", username, email: process.env.OLT_ADMIN_EMAIL?.trim() || null, passwordHash: hashOperatorPassword(password), role: "admin" }); console.log(`[Auth] Usuário administrador inicial criado: ${username}`); }

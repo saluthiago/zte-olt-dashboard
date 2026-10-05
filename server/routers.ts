@@ -1,24 +1,30 @@
-import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { authorizeUnconfiguredOnu, executeOperatorAction, moveOnu, getLiveOltSnapshot, getOltConfig, getPonAvailability, getUnconfiguredOnus, getOltNetworkConfig, runOltTerminalCommand, updateOltConfig, updateOnuDescription } from "./zteAdapter";
 import { z } from "zod";
-import { randomBytes, scryptSync } from "node:crypto";
-import { deleteOperatorAccount, insertOperationLog, listOperationLogs, listOperatorAccounts, saveOperatorAccount } from "./db";
-export function hashOperatorPassword(password: string) { const salt = randomBytes(16).toString("hex"); return `scrypt$${salt}$${scryptSync(password, salt, 32).toString("hex")}`; }
+import { TRPCError } from "@trpc/server";
+
+import { deleteOperatorAccount, getOperatorByUsername, insertOperationLog, listOperationLogs, listOperatorAccounts, saveOperatorAccount } from "./db";
+import { createLocalSession, hashOperatorPassword, LOCAL_SESSION_COOKIE, verifyOperatorPassword } from "./localAuth";
+import { ENV } from "./_core/env";
 
 export const appRouter = router({
     // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
+    login: publicProcedure.input(z.object({ username: z.string().trim().min(1).max(80), password: z.string().min(1).max(200) })).mutation(async ({ ctx, input }) => {
+      const account = await getOperatorByUsername(input.username);
+      if (!account || !verifyOperatorPassword(input.password, account.passwordHash)) throw new TRPCError({ code: "UNAUTHORIZED", message: "Usuário ou senha inválidos." });
+      const session = createLocalSession({ id: account.id, openId: `local:${account.username}`, username: account.username, name: account.name, role: account.role === "admin" ? "admin" : "user" }, ENV.cookieSecret);
+      ctx.res.cookie(LOCAL_SESSION_COOKIE, session, { ...getSessionCookieOptions(ctx.req), maxAge: 1000 * 60 * 60 * 12 });
+      return { success: true } as const;
+    }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return {
-        success: true,
-      } as const;
+      ctx.res.clearCookie(LOCAL_SESSION_COOKIE, { ...cookieOptions, maxAge: 0 });
+      return { success: true } as const;
     }),
   }),
 

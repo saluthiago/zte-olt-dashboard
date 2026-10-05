@@ -142,7 +142,7 @@ sudo systemctl restart olt-ops
 
 Restrinja o acesso ao Telnet/SNMP por firewall e VLAN de gerência. Não exponha as portas `7326` ou `7361` na Internet. Prefira uma VPN ou ACL permitindo somente o IP do servidor. Troque as credenciais padrão, use TLS no domínio, faça backup do banco e limite o acesso ao menu Users a administradores.
 
-O menu **Users** da interface 1.0 cadastra perfis de administrador, operador e técnico; o perfil técnico é apresentado como limitado ao tempo real. Para uma instalação com autenticação local independente do OAuth, implemente um provedor de identidade ou reverse proxy autenticado antes de expor o painel à Internet.
+O menu **Users** da interface 1.0 cadastra perfis de administrador, operador e técnico; o perfil técnico é apresentado como limitado ao tempo real. O acesso da versão atual é feito pelo login local com usuário e senha, protegido por cookie assinado.
 
 
 ## 9. Arquivos, linguagem e protocolos
@@ -164,7 +164,7 @@ O parser tenta ler `MAC address`, `MAC` ou `Mac address` no `show gpon onu detai
 
 ### Onde ficam os dados locais da interface
 
-Nesta versão, templates, perfis de OLT, Users, logs de operação, interfaces/VLANs/IPs e logo ficam no `localStorage` do navegador. Isso é adequado para operação inicial em um único navegador, mas não é uma autenticação ou auditoria centralizada. Para uso com vários técnicos, migre esses itens para tabelas MySQL e armazene senhas somente com hash, nunca em texto puro.
+Nesta versão, templates, perfis de OLT, interfaces/VLANs/IPs e logo ficam no `localStorage` do navegador. Usuários e logs de operação ficam persistidos no MySQL; senhas são armazenadas somente com hash scrypt e salt.
 
 ### Instalação sem Git
 
@@ -182,3 +182,27 @@ nc -vzu 45.162.123.46 7361
 ```
 
 Antes de liberar o domínio, confirme que o firewall permite somente HTTP/HTTPS para o público e que SNMP/Telnet são acessíveis apenas pelo IP do servidor ou pela VPN de gerência.
+
+## 10. Login local com usuário e senha
+
+A versão 1.0 usa login local por cookie assinado. O OAuth não é necessário para acessar o painel. Defina no `.env` do servidor, sem publicar esses valores:
+
+```dotenv
+JWT_SECRET=gere-um-segredo-longo-e-aleatorio
+OLT_ADMIN_USERNAME=admin
+OLT_ADMIN_PASSWORD=troque-por-uma-senha-forte
+OLT_ADMIN_NAME=Administrador
+OLT_ADMIN_EMAIL=admin@manianet.com.br
+```
+
+Na primeira inicialização, o sistema cria automaticamente o administrador se o usuário ainda não existir. A senha é armazenada com scrypt e salt. Para aplicar:
+
+```bash
+cd /opt/zte-olt-dashboard
+nano .env
+runuser -u oltops -- pnpm build
+systemctl restart olt-ops
+systemctl status olt-ops --no-pager
+```
+
+Depois entre no domínio usando o usuário e a senha definidos no `.env`. Usuários adicionais podem ser cadastrados no menu **Users** pelo administrador.

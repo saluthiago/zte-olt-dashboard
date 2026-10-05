@@ -46,7 +46,6 @@ import { toast } from "sonner";
 import { applyOperatorAction, getOperatorActionLabel, getSignalLevel } from "@shared/olt";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { startLogin } from "@/const";
 
 
 type ONUStatus = "online" | "alerta" | "offline";
@@ -144,7 +143,8 @@ function ActionButton({ icon: Icon, label, tone = "muted", onClick }: { icon: ty
 }
 
 export default function Home() {
-  const { user, loading: authLoading, logout } = useAuth();
+  const { user, loading: authLoading, logout, login, loginPending, loginError } = useAuth();
+  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [onus, setOnus] = useState<ONU[]>([]);
   const [events, setEvents] = useState<EventItem[]>(initialEvents);
   const [selectedId, setSelectedId] = useState("onu-02");
@@ -396,7 +396,7 @@ Esta ação será executada na OLT ZTE C300 real.`)) return;
   }
 
   if (authLoading) return <div className="flex min-h-screen items-center justify-center bg-[#121126] text-sm text-slate-300">Carregando autenticação...</div>;
-  if (!user) return <div className="flex min-h-screen items-center justify-center bg-[#121126] p-6"><div className="w-full max-w-md rounded-2xl border border-fuchsia-300/20 bg-[#0b1a2a] p-8 text-center shadow-2xl"><img src={logoSrc} alt="XtremNet" className="mx-auto mb-6 h-16 w-auto object-contain" /><h1 className="text-2xl font-semibold text-white">Login obrigatório</h1><p className="mt-2 text-sm text-slate-400">Entre para acessar o painel operacional da OLT.</p><button onClick={() => startLogin()} className="mt-6 w-full rounded-lg bg-fuchsia-300 px-4 py-3 text-sm font-bold text-slate-950">Entrar</button></div></div>;
+  if (!user) return <div className="flex min-h-screen items-center justify-center bg-[#121126] p-6"><form onSubmit={(event) => { event.preventDefault(); login(loginForm.username, loginForm.password).catch(() => undefined); }} className="w-full max-w-md rounded-2xl border border-fuchsia-300/20 bg-[#0b1a2a] p-8 shadow-2xl"><img src={logoSrc} alt="XtremNet" className="mx-auto mb-6 h-16 w-auto object-contain" /><h1 className="text-center text-2xl font-semibold text-white">Acesso ao OLT.OPS</h1><p className="mt-2 text-center text-sm text-slate-400">Entre com seu usuário e senha para acessar a operação.</p><label className="mt-6 block text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Usuário<input autoFocus value={loginForm.username} onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })} autoComplete="username" className="mt-2 h-11 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 text-sm text-white outline-none focus:border-fuchsia-300" /></label><label className="mt-4 block text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Senha<input type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} autoComplete="current-password" className="mt-2 h-11 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 text-sm text-white outline-none focus:border-fuchsia-300" /></label>{loginError && <p className="mt-3 rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-sm text-rose-200">{loginError.message || "Usuário ou senha inválidos."}</p>}<button disabled={loginPending || !loginForm.username || !loginForm.password} className="mt-6 w-full rounded-lg bg-fuchsia-300 px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-fuchsia-200 disabled:cursor-not-allowed disabled:opacity-50">{loginPending ? "Entrando..." : "Entrar"}</button></form></div>;
 
   return (
     <div className="min-h-screen bg-[#07111e] text-slate-100 selection:bg-fuchsia-300/20">
