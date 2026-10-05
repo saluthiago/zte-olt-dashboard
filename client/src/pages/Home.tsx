@@ -261,16 +261,21 @@ export default function Home() {
     const needsVlan = Boolean(template && /\b(?:user-vlan|vlan)\s+(?:vlan|\{vlan\})\b/i.test(template.body));
     if (needsVlan && !/^\d{1,4}$/.test(provisionForm.vlan.trim())) { toast.warning("Informe uma VLAN numérica antes de autorizar"); return; }
     if (commands.some((command) => /\{[a-z0-9-]+\}/i.test(command) || /\b(?:user-vlan|vlan)\s+vlan\b/i.test(command))) { toast.warning("Preencha corretamente todas as variáveis do template"); return; }
-    if (!window.confirm(`Autorizar ${targetSerial} na PON ${pon}, vaga ${ponAvailability.data.nextOnuId}?\n\nTemplate: ${template?.name ?? "sem template"}\nComandos: ${commands.length}`)) return;
+    const preview = authorizationScript();
+    if (!window.confirm(`PRÉVIA — comandos que serão enviados à OLT\n\nAutorizar ${targetSerial} na PON ${pon}, vaga ${ponAvailability.data.nextOnuId}?\n\nTemplate: ${template?.name ?? "sem template"}\n\n${preview}\n\nClique em OK para executar ou Cancelar para não enviar nada.`)) return;
     toast("Enviando comandos para a OLT", { description: commands.slice(0, 3).join(" → ") + (commands.length > 3 ? ` · +${commands.length - 3} comandos` : "") });
     authorizeUnconfigured.mutate({ pon, serial: targetSerial, onuId: ponAvailability.data.nextOnuId, description: provisionForm.description || undefined, commands }, { onSuccess: async () => { const target = `${pon}:${ponAvailability.data?.nextOnuId}`; toast.success("ONU autorizada", { description: `${target} · coleta iniciada` }); logCreate.mutate({ action: "autorizar", onu: target, commands }); await Promise.all([liveSnapshot.refetch(), unconfiguredOnus.refetch()]); refreshAfterMutation(); window.setTimeout(() => unconfiguredOnus.refetch(), 1500); }, onError: (error) => toast.error("Falha ao autorizar ONU", { description: error.message }) });
   }
 
   function moveSelected() {
     if (!moveSource || !/^\d+\/\d+\/\d+$/.test(moveForm.targetPon) || !moveAvailability.data?.nextOnuId) { toast.warning("Informe ONU e PON destino; aguarde o cálculo da vaga livre"); return; }
-    if (!window.confirm(`Mover ${moveSource.slot} para ${moveForm.targetPon}:${moveAvailability.data.nextOnuId}?\n\nA ONU será removida da PON de origem e cadastrada na PON destino.`)) return;
-    toast("Enviando comandos de movimentação", { description: `no onu ${moveSource.slot.split(":")[1]} → onu ${moveAvailability.data.nextOnuId} na PON ${moveForm.targetPon}` });
-    moveOnu.mutate({ source: moveSource.slot, targetPon: moveForm.targetPon, targetOnuId: moveAvailability.data.nextOnuId, serial: moveForm.serial || moveSource.serial }, { onSuccess: async () => { const target = `${moveForm.targetPon}:${moveAvailability.data?.nextOnuId}`; logCreate.mutate({ action: "mover", onu: moveSource.slot, commands: [`no onu ${moveSource.slot.split(":")[1]}`, `onu ${moveAvailability.data?.nextOnuId} na PON ${moveForm.targetPon}`, `interface gpon-onu_${target}`] }); toast.success("ONU movida", { description: target }); await liveSnapshot.refetch(); setActiveNav("ONUs / Clientes"); }, onError: (error) => toast.error("Falha ao mover ONU", { description: error.message }) });
+    const sourcePon = moveSource.slot.split(":")[0];
+    const sourceId = moveSource.slot.split(":")[1];
+    const targetId = moveAvailability.data.nextOnuId;
+    const moveCommands = ["terminal length 0", `show running-config interface gpon-onu_${moveSource.slot}`, "configure terminal", `interface gpon-olt_${sourcePon}`, `no onu ${sourceId}`, `interface gpon-olt_${moveForm.targetPon}`, `onu ${targetId} type ZTE-F680 sn ${moveForm.serial || moveSource.serial}`, "exit", `interface gpon-onu_${moveForm.targetPon}:${targetId}`, "[reaplicar configuração da interface de origem]", "end"];
+    if (!window.confirm(`PRÉVIA — comandos que serão enviados à OLT\n\nMover ${moveSource.slot} para ${moveForm.targetPon}:${targetId}?\n\n${moveCommands.join("\n")}\n\nA configuração da interface de origem será reaplicada automaticamente.\n\nClique em OK para executar ou Cancelar para não enviar nada.`)) return;
+    toast("Enviando comandos de movimentação", { description: moveCommands.slice(0, 4).join(" → ") + " · configuração será reaplicada" });
+    moveOnu.mutate({ source: moveSource.slot, targetPon: moveForm.targetPon, targetOnuId: moveAvailability.data.nextOnuId, serial: moveForm.serial || moveSource.serial }, { onSuccess: async () => { const target = `${moveForm.targetPon}:${moveAvailability.data?.nextOnuId}`; logCreate.mutate({ action: "mover", onu: moveSource.slot, commands: moveCommands }); toast.success("ONU movida", { description: target }); await liveSnapshot.refetch(); setActiveNav("ONUs / Clientes"); }, onError: (error) => toast.error("Falha ao mover ONU", { description: error.message }) });
   }
 
   function saveTemplate() {
@@ -343,10 +348,8 @@ export default function Home() {
       return;
     }
     const labels: Record<string, string> = { authorize: "ativar", disable: "desativar", deauthorize: "desautorizar e remover", reboot: "reiniciar" };
-    if (!window.confirm(`Confirmar ${labels[action] ?? action} a ONU ${onu.slot}?
-
-Esta ação será executada na OLT ZTE C300 real.`)) return;
-    const commands = action === "reboot" ? [`pon-onu-mng gpon-onu_${onu.slot}`, "reboot", "yes"] : action === "deauthorize" ? [`interface gpon-olt_${onu.slot.split(":")[0]}`, `no onu ${onu.slot.split(":")[1]}`, "end"] : [`interface gpon-onu_${onu.slot}`, action === "disable" ? "disable" : "no shutdown", "end"];
+    const commands = action === "reboot" ? ["terminal length 0", "configure terminal", `pon-onu-mng gpon-onu_${onu.slot}`, "reboot", "yes", "end"] : action === "deauthorize" ? ["terminal length 0", "configure terminal", `interface gpon-olt_${onu.slot.split(":")[0]}`, `no onu ${onu.slot.split(":")[1]}`, "end"] : ["terminal length 0", "configure terminal", `interface gpon-onu_${onu.slot}`, action === "disable" ? "disable" : "no shutdown", "end"];
+    if (!window.confirm(`PRÉVIA — comandos que serão enviados à OLT\n\nAção: ${labels[action] ?? action} · ONU: ${onu.slot}\n\n${commands.join("\n")}\n\nClique em OK para executar ou Cancelar para não enviar nada.`)) return;
     toast("Enviando comando para a OLT", { description: commands.join(" → ") });
     if (action === "deauthorize") setOnus((current) => current.filter((item) => item.id !== onu.id));
     else if (action === "disable") setOnus((current) => current.map((item) => item.id === onu.id ? { ...item, status: "offline", lastEvent: "Desativada pelo operador" } : item));
