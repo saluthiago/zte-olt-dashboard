@@ -149,7 +149,7 @@ export default function Home() {
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [onus, setOnus] = useState<ONU[]>([]);
   const [events, setEvents] = useState<EventItem[]>(initialEvents);
-  const [selectedId, setSelectedId] = useState<string | null>("onu-02");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [onuHistory, setOnuHistory] = useState<Record<string, TelemetryPoint[]>>(() => { try { return JSON.parse(localStorage.getItem("olt-onu-history") || "{}") as Record<string, TelemetryPoint[]>; } catch { return {}; } });
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"todos" | ONUStatus>("todos");
@@ -240,7 +240,7 @@ export default function Home() {
       return matchesSearch && matchesStatus && matchesPon;
     });
   }, [sortedOnus, search, statusFilter, ponFilter]);
-  const selected = onus.find((onu) => onu.id === selectedId) ?? onus[0];
+  const selected = selectedId ? onus.find((onu) => onu.id === selectedId) : undefined;
   const selectedHistory = selected ? (onuHistory[selected.id] ?? []) : [];
   const selectedLogs = selected ? operationLogs.filter((log) => log.onu === selected.slot || log.onu?.startsWith(`${selected.slot}:`)) : [];
   const historySignals = selectedHistory.filter((point) => point.signal > -90);
