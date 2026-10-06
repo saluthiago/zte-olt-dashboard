@@ -39,7 +39,7 @@ export type OltConfig = {
   usernameConfigured: boolean;
 };
 
-const overrides: Partial<Pick<OltConfig, "host" | "snmpPort" | "telnetPort" | "boards">> = {};
+const overrides: Partial<{ host: string; snmpPort: number; telnetPort: number; boards: string; telnetUsername: string; telnetPassword: string }> = {};
 
 function requiredEnv(name: string) {
   const value = process.env[name];
@@ -47,9 +47,10 @@ function requiredEnv(name: string) {
   return value;
 }
 
-function configValue(name: "OLT_ZTE_HOST" | "OLT_ZTE_SNMP_PORT" | "OLT_ZTE_TELNET_PORT" | "OLT_ZTE_BOARDS") {
-  const keys = { OLT_ZTE_HOST: "host", OLT_ZTE_SNMP_PORT: "snmpPort", OLT_ZTE_TELNET_PORT: "telnetPort", OLT_ZTE_BOARDS: "boards" } as const;
-  return overrides[keys[name]] ?? requiredEnv(name);
+function configValue(name: "OLT_ZTE_HOST" | "OLT_ZTE_SNMP_PORT" | "OLT_ZTE_TELNET_PORT" | "OLT_ZTE_BOARDS" | "OLT_ZTE_TELNET_USERNAME" | "OLT_ZTE_TELNET_PASSWORD") {
+  const keys = { OLT_ZTE_HOST: "host", OLT_ZTE_SNMP_PORT: "snmpPort", OLT_ZTE_TELNET_PORT: "telnetPort", OLT_ZTE_BOARDS: "boards", OLT_ZTE_TELNET_USERNAME: "telnetUsername", OLT_ZTE_TELNET_PASSWORD: "telnetPassword" } as const;
+  const override = overrides[keys[name]];
+  return override !== undefined ? String(override) : requiredEnv(name);
 }
 
 export function getOltConfig(): OltConfig {
@@ -59,16 +60,20 @@ export function getOltConfig(): OltConfig {
     telnetPort: Number(configValue("OLT_ZTE_TELNET_PORT")),
     boards: String(configValue("OLT_ZTE_BOARDS")),
     communityConfigured: Boolean(process.env.OLT_ZTE_SNMP_COMMUNITY),
-    usernameConfigured: Boolean(process.env.OLT_ZTE_TELNET_USERNAME && process.env.OLT_ZTE_TELNET_PASSWORD),
+    usernameConfigured: Boolean((overrides.telnetUsername ?? process.env.OLT_ZTE_TELNET_USERNAME) && (overrides.telnetPassword ?? process.env.OLT_ZTE_TELNET_PASSWORD)),
   };
 }
 
-export function updateOltConfig(input: Pick<OltConfig, "host" | "snmpPort" | "telnetPort" | "boards">) {
+export function updateOltConfig(input: { host: string; snmpPort: number; telnetPort: number; boards: string; telnetUsername?: string; telnetPassword?: string }) {
   if (!/^([a-zA-Z0-9.-]+|\d{1,3}(\.\d{1,3}){3})$/.test(input.host)) throw new Error("Host/IP inválido");
   if (!Number.isInteger(input.snmpPort) || input.snmpPort < 1 || input.snmpPort > 65535) throw new Error("Porta SNMP inválida");
   if (!Number.isInteger(input.telnetPort) || input.telnetPort < 1 || input.telnetPort > 65535) throw new Error("Porta Telnet inválida");
   if (!/^\d+:\d+(,\d+:\d+)*$/.test(input.boards)) throw new Error("Slots devem usar o formato 8:8,9:16");
-  Object.assign(overrides, input);
+  if (input.telnetUsername !== undefined && (input.telnetUsername.length < 1 || input.telnetUsername.length > 80)) throw new Error("Usuário Telnet inválido");
+  if (input.telnetPassword !== undefined && (input.telnetPassword.length < 1 || input.telnetPassword.length > 200)) throw new Error("Senha Telnet inválida");
+  Object.assign(overrides, { host: input.host, snmpPort: input.snmpPort, telnetPort: input.telnetPort, boards: input.boards });
+  if (input.telnetUsername?.trim()) overrides.telnetUsername = input.telnetUsername.trim();
+  if (input.telnetPassword) overrides.telnetPassword = input.telnetPassword;
   cached = undefined;
   return getOltConfig();
 }
@@ -102,6 +107,12 @@ export function parseOnuDetail(output: string) {
   const mac = value("MAC address") || value("MAC") || value("Mac address") || output.match(/\bMAC(?:\s+address)?\s*[:=]?\s*([0-9A-F]{2}(?:(?::|-)[0-9A-F]{2}){5}|[0-9A-F]{4}(?:\.[0-9A-F]{4}){2})/i)?.[1] || "não informado";
   const normalizedMac = mac.replace(/[.:-]/g, "").match(/.{2}/g)?.join(":").toUpperCase() ?? "não informado";
   return { name: value("Description") || value("Name") || "ONU sem descrição", serial: value("Serial number") || "—", mac: normalizedMac, distance: distance ? Number(distance) / 1000 : 0, uptime: value("Online Duration") || "—", profile: value("Type") || "GPON", online: phase === "working" || state === "ready" };
+}
+
+export function parseOnuMac(output: string) {
+  const match = output.match(/(?:MAC(?: address)?|mac-address)\s*[:=]?\s*([0-9A-F]{2}(?:(?::|-)[0-9A-F]{2}){5}|[0-9A-F]{4}(?:\.[0-9A-F]{4}){2})/i) ?? output.match(/\b([0-9A-F]{2}(?:(?::|-)[0-9A-F]{2}){5}|[0-9A-F]{4}(?:\.[0-9A-F]{4}){2})\b/i);
+  if (!match?.[1]) return "não informado";
+  return match[1].replace(/[.:-]/g, "").match(/.{2}/g)?.join(":").toUpperCase() ?? "não informado";
 }
 
 export function parseOnuPower(output: string) {
@@ -167,7 +178,7 @@ class TelnetSession {
 
 function validateOnuId(onuId: string) { if (!/^\d+\/\d+\/\d+:\d+$/.test(onuId)) throw new Error("ONU identifier is invalid"); return onuId; }
 
-export async function executeOperatorAction(action: OperatorAction, onuId: string) { const target = validateOnuId(onuId); const session = await TelnetSession.open(); try { await session.command("terminal length 0"); await enterConfigMode(session); if (action === "reboot") { await session.command(`pon-onu-mng gpon-onu_${target}`); await session.command("reboot"); await session.command("yes"); } else if (action === "deauthorize") { const [pon, id] = target.split(":"); await session.command(`interface gpon-olt_${pon}`); await session.command(`no onu ${id}`); await session.command("end"); } else { await session.command(`interface gpon-onu_${target}`); await session.command(action === "disable" ? "disable" : "no shutdown"); await session.command("end"); } cached = undefined; scheduleOltRefresh(); return { success: true as const, action, onuId: target, executedAt: Date.now() }; } finally { session.close(); } }
+export async function executeOperatorAction(action: OperatorAction, onuId: string) { const target = validateOnuId(onuId); const session = await TelnetSession.open(); try { await session.command("terminal length 0"); await enterConfigMode(session); if (action === "reboot") { await session.command(`pon-onu-mng gpon-onu_${target}`); await session.command("reboot"); await session.command("yes"); } else if (action === "deauthorize") { const [pon, id] = target.split(":"); await session.command(`interface gpon-olt_${pon}`); await session.command(`no onu ${id}`); await session.command("end"); } else { await session.command(`interface gpon-onu_${target}`); await session.command(action === "disable" ? "disable" : "enable"); await session.command("end"); } cached = undefined; scheduleOltRefresh(); return { success: true as const, action, onuId: target, executedAt: Date.now() }; } finally { session.close(); } }
 
 export function parseNetworkConfig(output: string): OltNetworkEntry[] {
   const entries: OltNetworkEntry[] = [];
@@ -335,7 +346,12 @@ function startDetailEnrichment(rows: StateRow[]) {
       await session.command("terminal length 0");
       for (const row of batch) {
         try {
-          const detail = parseOnuDetail(await session.command(`show gpon onu detail-info gpon-onu_${row.interfaceName}`));
+          let detail = parseOnuDetail(await session.command(`show gpon onu detail-info gpon-onu_${row.interfaceName}`));
+          try {
+            const macOutput = await session.command(`show mac gpon onu gpon-onu_${row.interfaceName}`);
+            const collectedMac = parseOnuMac(macOutput);
+            if (collectedMac !== "não informado") detail = { ...detail, mac: collectedMac };
+          } catch (error) { console.warn(`[OLT] MAC collection skipped for ${row.interfaceName}:`, error); }
           const signal = parseOnuPower(await session.command(`show pon power attenuation gpon-onu_${row.interfaceName}`));
           const hasValidSignal = Number.isFinite(signal) && signal > -90;
           const status = row.status === "online" && detail.online && hasValidSignal ? (signal < -27 ? "alerta" : "online") : "offline";
